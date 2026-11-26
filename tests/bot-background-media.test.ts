@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { handleBotBackgroundMedia } from "../lib/bot-background-media.ts";
+import { handleBotPreferences } from "../lib/preferences.ts";
 import { type PreferenceImage } from "../lib/supabase.ts";
 
 const userId = "123456789012345678";
@@ -18,6 +19,20 @@ function setup() {
   const store = { async get() { return id; }, async resolveImage() { return image; }, async set() {}, async reset() {} };
   return { calls, deps: { env, limit: () => true, store, async getLevel() { calls.levels++; return { userId, guildId, level: 20 }; }, storage: { async download() { calls.downloads++; return png; } } } };
 }
+
+test("bot callers await async denial before database, level or storage", async () => {
+  const { calls, deps } = setup();
+  let reads = 0;
+  deps.store.get = async () => { reads++; return id; };
+  deps.store.resolveImage = async () => { reads++; return image; };
+  const dependencies = { ...deps, limit: async () => { await Promise.resolve(); return false; } };
+  for (const response of [await handleBotBackgroundMedia(request(), id, dependencies), await handleBotPreferences(request(), dependencies)]) {
+    assert.equal(response.status, 429);
+    assert.deepEqual(await response.json(), { error: "rate_limited" });
+  }
+  assert.equal(reads, 0);
+  assert.deepEqual(calls, { levels: 0, downloads: 0 });
+});
 
 test("bot media returns private PNG after two fresh level checks and never returns object keys", async () => {
   const { calls, deps } = setup();

@@ -17,7 +17,8 @@ const store = {
   async reset(u: string, g: string) { records.delete(`${u}:${g}`); },
 };
 const fetcher = (async (url) => Response.json(String(url).includes("guilds") ? [{ id: guild, name: "Test" }, { id: other, name: "Other" }] : { id: user, username: "tester" })) as typeof fetch;
-const deps = { env, store, fetch: fetcher, limit: () => true };
+const deps = { env, store, fetch: fetcher, limit: () => true, discordScope: {} };
+test.beforeEach(() => { deps.discordScope = {}; });
 async function browser(body?: unknown, query = `guildId=${guild}`, expiresAt = Date.now() + 60000) {
   const cookie = `profile_session=${await sealData({ accessToken: "mock", expiresAt }, { password: env.SESSION_PASSWORD, ttl: 28800 })}`;
   return new Request(`https://dashboard.example/api/preferences${body === undefined ? `?${query}` : ""}`, { method: body === undefined ? "GET" : "POST", headers: { cookie, origin: env.APP_URL, "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
@@ -33,8 +34,8 @@ async function check(response: Response, status: number) {
 
 test("browser identity cannot be supplied; saves and resets stay isolated by guild", async () => {
   records.clear();
-  await check(await handlePreferences(await browser({ guildId: guild, backgroundId: "sample-plum", userId: other }), deps), 400);
-  assert.deepEqual(await check(await handlePreferences(await browser({ guildId: guild, backgroundId: "sample-plum" }), deps), 200), { status: "saved", backgroundId: "sample-plum" });
+  await check(await handlePreferences(await browser({ guildId: guild, backgroundId: "catalog-background-1", userId: other }), deps), 400);
+  assert.deepEqual(await check(await handlePreferences(await browser({ guildId: guild, backgroundId: "catalog-background-1" }), deps), 200), { status: "saved", backgroundId: "catalog-background-1" });
   assert.deepEqual(await check(await handlePreferences(await browser(undefined, `guildId=${other}`), deps), 200), { status: "ready", backgroundId: null });
   await check(await handlePreferences(await browser({ guildId: guild, backgroundId: null }), deps), 200);
   assert.equal((await check(await handlePreferences(await browser(), deps), 200)).backgroundId, null);
@@ -64,7 +65,7 @@ test("CSRF, content type, oversized and malformed bodies, invalid IDs rejected",
 test("expiry, upstream 401, 429, malformed JSON and timeout are sanitized", async () => {
   await check(await handlePreferences(await browser(undefined, undefined, Date.now() - 1), deps), 401);
   for (const status of [401, 429]) {
-    await check(await handlePreferences(await browser(), { ...deps, fetch: (async () => new Response("secret", { status })) as typeof fetch }), status === 401 ? 401 : 503);
+    await check(await handlePreferences(await browser(), { ...deps, discordScope: {}, fetch: (async () => new Response("secret", { status })) as typeof fetch }), status === 401 ? 401 : 503);
   }
   for (const f of [async () => new Response("{"), async () => { throw new Error("secret timeout"); }]) {
     const response = await handlePreferences(await browser(), { ...deps, fetch: f as typeof fetch });
@@ -85,7 +86,7 @@ test("Discord timeout aborts cleanly and inactive catalog save returns 400", asy
       await new Promise((resolve) => setTimeout(resolve, 1000));
       return Response.json({ id: user, username: "tester" });
     }
-    assert.equal(init?.signal, signal);
+    assert.notEqual(init?.signal, signal);
     return new Promise<Response>((_resolve, reject) => {
       init?.signal?.addEventListener("abort", () => { aborted = true; reject(new Error("private timeout")); }, { once: true });
     });
@@ -147,7 +148,8 @@ test("image GET and bot response fail closed when locked, stale or provider fail
     } else await check(await handleBotPreferences(bot(), { ...deps, store: imageStore, getLevel }), 503);
   }
   assert.equal((await check(await handleBotPreferences(bot(), { ...deps, store: { ...imageStore, async resolveImage() { return null; } }, getLevel: level }), 200)).backgroundId, null);
-  assert.equal((await check(await handleBotPreferences(bot(), { ...deps, store: { ...store, async get() { return "sample-plum"; } }, getLevel: async () => { throw new Error(); } }), 200)).backgroundId, "sample-plum");
+  assert.equal((await check(await handleBotPreferences(bot(), { ...deps, store: { ...store, async get() { return "sample-plum"; } }, getLevel: async () => { throw new Error(); } }), 200)).backgroundId, null);
+  assert.deepEqual(await check(await handleBotPreferences(bot(), { ...deps, store: { ...store, async get() { return "catalog-background-2"; } } }), 200), { status: "ready", backgroundId: "catalog-background-2", background: { id: "catalog-background-2", kind: "catalog-image", mime: "image/jpeg", width: 736, height: 414 } });
   assert.equal((await check(await handlePreferences(await browser({ guildId: guild, backgroundId: null }), { ...deps, store: imageStore }), 200)).backgroundId, null);
 });
 
@@ -170,5 +172,33 @@ test("database distinguishes missing/error and validates active known asset on r
     if (mode === "inactive") await assert.rejects(db.set(user, guild, "sample-plum"), (e: unknown) => e instanceof ApiError && e.status === 400);
     await assert.rejects(db.set(user, guild, "external"), ApiError);
     assert.ok(calls.some(url => url.includes(`user_id=eq.${user}`) && url.includes(`guild_id=eq.${guild}`)));
+  }
+});
+
+test("built-in catalog selections require matching database rows with a null color", async () => {
+  const env = { SUPABASE_URL: "https://database.example", SUPABASE_SERVICE_ROLE_KEY: "test-service-key-not-real-12345" };
+  for (const id of ["catalog-background-1", "catalog-background-2"]) {
+    const row = { id, asset_key: id, kind: "catalog-image", color: null };
+    for (const data of [row, null, { ...row, kind: "solid" }, { ...row, asset_key: "wrong" }, { ...row, color: "#202024" }]) {
+      let writes = 0;
+      const store = preferenceStore(env, async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/profile_backgrounds")) {
+          assert.equal(url.searchParams.get("is_active"), "eq.true");
+          assert.equal(url.searchParams.get("id"), `eq.${id}`);
+          return Response.json(data);
+        }
+        if (init?.method === "POST") {
+          writes++;
+          assert.equal(JSON.parse(String(init.body)).background_id, id);
+          return new Response(null, { status: 204 });
+        }
+        return Response.json({ background_id: id });
+      });
+      assert.equal(await store.get(user, guild), data === row ? id : null);
+      if (data === row) await store.set(user, guild, id);
+      else await assert.rejects(store.set(user, guild, id), (error: unknown) => error instanceof ApiError && error.status === 400);
+      assert.equal(writes, data === row ? 1 : 0);
+    }
   }
 });

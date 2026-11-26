@@ -9,7 +9,8 @@ const other = "323456789012345678";
 const env = { DISCORD_CLIENT_ID: user, DISCORD_CLIENT_SECRET: "mock", SESSION_PASSWORD: "test-only-session-password-1234567890", APP_URL: "https://dashboard.example", PROFILE_BOT_GUILD_IDS: guild };
 const fetcher = (async (url) => Response.json(String(url).includes("guilds") ? [{ id: guild, name: "Test" }] : { id: user, username: "tester" })) as typeof fetch;
 const row = { id: "a5ca31b2-4334-403d-9234-3f4232a53442", name: "Forest", slot_number: 3, status: "ready", is_active: true, revision: 2 };
-const deps = { env, fetch: fetcher, limit: () => true, getLevel: async () => ({ userId: user, guildId: guild, level: 65 }), listBackgrounds: async () => [] };
+const deps = { env, discordScope: {}, fetch: fetcher, limit: () => true, getLevel: async () => ({ userId: user, guildId: guild, level: 65 }), listBackgrounds: async () => [] };
+test.beforeEach(() => { deps.discordScope = {}; });
 async function browser(query = `guildId=${guild}`, expiresAt = Date.now() + 60000) {
   const cookie = `profile_session=${await sealData({ accessToken: "mock", expiresAt }, { password: env.SESSION_PASSWORD, ttl: 28800 })}`;
   return new Request(`https://dashboard.example/api/backgrounds?${query}`, { headers: { cookie } });

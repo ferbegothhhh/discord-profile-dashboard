@@ -4,6 +4,9 @@ export type Environment = Record<string, string | undefined>;
 export class ApiError extends Error {
   status: number;
   code: string;
+  reason?: "rate_limited" | "upstream_status" | "network" | "timeout" | "invalid_response" | "capacity" | "aborted";
+  upstreamStatus?: number;
+  retryAfter?: number;
   constructor(status: number, code: string) { super(code); this.status = status; this.code = code; }
 }
 export const privateHeaders = { "Cache-Control": "private, no-store, max-age=0", Pragma: "no-cache", Vary: "Cookie, Authorization", "X-Content-Type-Options": "nosniff" };
@@ -11,7 +14,10 @@ export function privateJson(data: unknown, status = 200) {
   return Response.json(data, { status, headers: { ...privateHeaders, ...(status === 429 ? { "Retry-After": "60" } : {}) } });
 }
 export function apiFailure(error: unknown) {
-  return error instanceof ApiError ? privateJson({ error: error.code }, error.status) : privateJson({ error: "service_unavailable" }, 503);
+  if (!(error instanceof ApiError)) return privateJson({ error: "service_unavailable" }, 503);
+  const response = privateJson({ error: error.code, ...(error.reason ? { reason: error.reason } : {}) }, error.status);
+  if (error.retryAfter) response.headers.set("Retry-After", String(error.retryAfter));
+  return response;
 }
 export function snowflake(value: unknown): value is string { return typeof value === "string" && /^[1-9]\d{16,19}$/.test(value); }
 export function botGuilds(env: Environment = process.env): Set<string> {
@@ -46,7 +52,7 @@ export function createProcessLimiter(max = 120, capacity = 2000, now = Date.now)
     return ++bucket.count <= max;
   };
 }
-export async function boundedJson(request: Request, max = 1024): Promise<unknown> {
+export async function boundedJson(request: Pick<Request, "headers" | "body">, max = 1024): Promise<unknown> {
   const length = request.headers.get("content-length");
   if (length && (!/^\d+$/.test(length) || Number(length) > max)) throw new ApiError(400, "invalid_body");
   if (!request.body) throw new ApiError(400, "invalid_body");

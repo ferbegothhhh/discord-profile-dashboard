@@ -1,11 +1,12 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { authConfig, authenticatedMember, type Dependencies } from "./auth.ts";
-import { ApiError, apiFailure, createProcessLimiter, privateJson, snowflake, verifyBotGuild } from "./api-security.ts";
+import { ApiError, apiFailure, privateJson, snowflake, verifyBotGuild } from "./api-security.ts";
 import { canUseCustomSlot, isCustomSlot } from "./background-policy.ts";
 import { getCurrentLevel } from "./bot-level.ts";
 import { backgroundStorage, type BackgroundStorage } from "./background-storage.ts";
 import { IMAGE_HEIGHT, IMAGE_WIDTH, ImageProcessingError, MAX_IMAGE_BYTES, MAX_OUTPUT_BYTES, processImage, readImageStream } from "./image-processing.ts";
-import { createSupabaseAdminClient } from "./supabase.ts";
+import { createDatabaseClient, type SupabaseConfig } from "./supabase.ts";
+import { enforceRateLimit } from "./shared-rate-limit.ts";
 
 if (typeof window !== "undefined") throw new Error("Server-only module");
 
@@ -20,11 +21,11 @@ export type BackgroundUploadDependencies = Dependencies & {
   getLevel?: typeof getCurrentLevel;
   store?: BackgroundUploadStore;
   storage?: Pick<BackgroundStorage, "upload" | "delete">;
+  config?: SupabaseConfig;
 };
-const uploadLimit = createProcessLimiter(6);
 
 function uploadStore(env: NonNullable<Dependencies["env"]>, fetcher?: typeof fetch): BackgroundUploadStore {
-  const client = createSupabaseAdminClient(env, fetcher);
+  const client = createDatabaseClient(env, fetcher);
   const args = (owner: Owner, reservation: Reservation) => ({ p_user_id: owner.userId, p_guild_id: owner.guildId, p_slot: owner.slot, p_id: reservation.id, p_object_key: reservation.object_key, p_revision: reservation.revision });
   return {
     async reserve(owner, reservation) {
@@ -54,7 +55,7 @@ export async function handleBackgroundUpload(request: Request, slotPath: string,
     if (!config) throw new ApiError(503, "setup_required");
     if (request.headers.get("origin") !== config.origin || request.headers.get("sec-fetch-site") === "cross-site") throw new ApiError(403, "csrf");
     const { user, guilds } = await authenticatedMember(request, config, dependencies);
-    if (!(dependencies.limit ?? uploadLimit)(user.id)) throw new ApiError(429, "rate_limited");
+    if (!await (dependencies.limit ? dependencies.limit(user.id) : enforceRateLimit(`background-upload:${user.id}`, 6, env))) throw new ApiError(429, "rate_limited");
     if (!/^[123]$/.test(slotPath)) throw new ApiError(400, "invalid_slot");
     const slot = Number(slotPath);
     if (!isCustomSlot(slot)) throw new ApiError(400, "invalid_slot");
@@ -76,7 +77,7 @@ export async function handleBackgroundUpload(request: Request, slotPath: string,
     if (length !== null && (!/^\d+$/.test(length) || Number(length) > MAX_IMAGE_BYTES)) throw new ApiError(413, "image_too_large");
     if (!request.body) throw new ApiError(400, "invalid_image");
     const store = dependencies.store ?? uploadStore(env, dependencies.fetch);
-    const storage = dependencies.storage ?? backgroundStorage({ env, fetcher: dependencies.fetch });
+    const storage = dependencies.storage ?? backgroundStorage({ env, config: dependencies.config, fetcher: dependencies.fetch });
     const owner = { userId: user.id, guildId, slot };
     const reservation = { id: randomUUID(), object_key: `profile-images/${randomBytes(16).toString("hex")}.png`, revision: 1 };
     pending = { owner, reservation, store, storage };

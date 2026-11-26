@@ -206,3 +206,19 @@ test("successful operations clear deadline timers", async () => {
   await new Promise((resolve) => setTimeout(resolve, 25));
   assert.equal(signal?.aborted, false);
 });
+
+test("supports injected configuration and ignores environment", async () => {
+  const injected = { url: "https://injected.example.test", serviceRoleKey: "injected-service-role-key" };
+  let calledUrl = "";
+  const adapter = backgroundStorage({
+    config: injected,
+    env: { SUPABASE_URL: "https://wrong.example.test", SUPABASE_SERVICE_ROLE_KEY: "wrong-key" },
+    fetcher: async (input) => {
+      calledUrl = String(input);
+      return response();
+    }
+  });
+  await adapter.download(key);
+  assert.ok(calledUrl.startsWith(injected.url));
+  assert.ok(!calledUrl.startsWith("https://wrong.example.test"));
+});

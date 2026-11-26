@@ -1,5 +1,29 @@
 import { expect, test } from "@playwright/test";
 
+test("security headers protect documents without blocking hydration", async ({ page, request }) => {
+  for (const path of ["/", "/privacy", "/terms"]) {
+    const response = await request.get(path);
+    expect(response.ok()).toBe(true);
+    const headers = response.headers();
+    const policy = headers["content-security-policy"].split(";").map((directive) => directive.trim());
+    expect(policy).toEqual(expect.arrayContaining(["base-uri 'none'", "object-src 'none'", "frame-ancestors 'none'", "form-action 'self' https://discord.com", "script-src-attr 'none'"]));
+    expect(headers["x-frame-options"]).toBe("DENY");
+    expect(headers["x-content-type-options"]).toBe("nosniff");
+    expect(headers["permissions-policy"]).toBe("camera=(), microphone=(), geolocation=(), payment=(), usb=()");
+    expect(headers["x-powered-by"]).toBeUndefined();
+  }
+  await page.addInitScript(() => {
+    const violations: string[] = [];
+    Object.assign(window, { securityViolations: violations });
+    document.addEventListener("securitypolicyviolation", (event) => violations.push(event.effectiveDirective));
+  });
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "Periksa konfigurasi" })).toBeVisible();
+  await page.getByRole("button", { name: "Periksa konfigurasi" }).click();
+  await expect(page.getByText("Login belum dikonfigurasi.", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => Reflect.get(window, "securityViolations"))).toEqual([]);
+});
+
 test("unavailable setup is honest, retry works and demo remains local", async ({ page, request }) => {
   await page.goto("/");
   await expect(page.getByText("Login belum dikonfigurasi.", { exact: true })).toBeVisible();
@@ -49,7 +73,7 @@ test("mock guild choice, empty, error, reload and POST logout click-through", as
   await expect(page.getByText("Tidak ada server dalam keanggotaan", { exact: false })).toBeVisible();
   state = "error";
   await page.getByRole("button", { name: "Muat ulang server" }).click();
-  await expect(page.getByText("Sesi atau daftar server gagal dimuat.", { exact: false })).toBeVisible();
+  await expect(page.getByText("Verifikasi sesi Discord belum tersedia.", { exact: false })).toBeVisible();
   state = "guilds";
   await page.getByRole("button", { name: "Muat ulang Discord" }).click();
   await expect(page.getByLabel("Server keanggotaan kamu")).toHaveValue("");

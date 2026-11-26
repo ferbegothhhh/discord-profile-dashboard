@@ -1,7 +1,8 @@
 import { authConfig, authenticatedMember, type Dependencies } from "./auth.ts";
-import { ApiError, apiFailure, createProcessLimiter, privateJson, snowflake, verifyBotGuild } from "./api-security.ts";
+import { ApiError, apiFailure, privateJson, snowflake, verifyBotGuild } from "./api-security.ts";
 import { backgroundStorage, type BackgroundStorage } from "./background-storage.ts";
-import { createSupabaseAdminClient } from "./supabase.ts";
+import { createDatabaseClient } from "./supabase.ts";
+import { enforceRateLimit } from "./shared-rate-limit.ts";
 
 if (typeof window !== "undefined") throw new Error("Server-only module");
 
@@ -12,7 +13,6 @@ export type BackgroundDeleteDependencies = Dependencies & {
   store?: BackgroundDeleteStore;
   storage?: Pick<BackgroundStorage, "delete">;
 };
-const deleteLimit = createProcessLimiter(6);
 
 function validResult(value: unknown): value is DeletedSlot {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
@@ -22,7 +22,7 @@ function validResult(value: unknown): value is DeletedSlot {
 }
 
 function deleteStore(env: NonNullable<Dependencies["env"]>, fetcher?: typeof fetch): BackgroundDeleteStore {
-  const client = createSupabaseAdminClient(env, fetcher);
+  const client = createDatabaseClient(env, fetcher);
   return {
     async deleteSlot(owner) {
       const { data, error } = await client.rpc("delete_profile_background_slot", { p_user_id: owner.userId, p_guild_id: owner.guildId, p_slot: owner.slot });
@@ -41,7 +41,7 @@ export async function handleBackgroundDelete(request: Request, slotPath: string,
     if (!config) throw new ApiError(503, "setup_required");
     if (request.headers.get("origin") !== config.origin || request.headers.get("sec-fetch-site") === "cross-site") throw new ApiError(403, "csrf");
     const { user, guilds } = await authenticatedMember(request, config, dependencies);
-    if (!(dependencies.limit ?? deleteLimit)(user.id)) throw new ApiError(429, "rate_limited");
+    if (!await (dependencies.limit ? dependencies.limit(user.id) : enforceRateLimit(`background-delete:${user.id}`, 6, env))) throw new ApiError(429, "rate_limited");
     if (!/^[123]$/.test(slotPath)) throw new ApiError(400, "invalid_slot");
     const slot = Number(slotPath);
     const params = new URL(request.url).searchParams;

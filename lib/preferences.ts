@@ -1,9 +1,10 @@
 import { authConfig, authenticatedMember, type Dependencies } from "./auth.ts";
-import { ApiError, apiFailure, boundedJson, createProcessLimiter, privateJson, snowflake, verifyBearer, verifyBotGuild } from "./api-security.ts";
-import { findBackground } from "./catalog.ts";
+import { ApiError, apiFailure, boundedJson, privateJson, snowflake, verifyBearer, verifyBotGuild } from "./api-security.ts";
+import { catalogMedia, findBackground } from "./catalog.ts";
 import { imageId, preferenceStore, validResolvedImage, type PreferenceStore, type PreferenceImage } from "./supabase.ts";
 import { getCurrentLevel } from "./bot-level.ts";
 import { canUseCustomSlot, type LevelSnapshot } from "./background-policy.ts";
+import { enforceRateLimit } from "./shared-rate-limit.ts";
 
 type Options = Dependencies & { store?: PreferenceStore; getLevel?: typeof getCurrentLevel };
 
@@ -19,8 +20,6 @@ async function resolveSelection(store: PreferenceStore, userId: string, guildId:
   if (!validResolvedImage(image, userId, guildId, id)) return null;
   return canUseCustomSlot(await preferenceLevel(userId, guildId, dependencies), userId, guildId, image.slot) ? image : null;
 }
-const browserLimit = createProcessLimiter(60);
-const serviceLimit = createProcessLimiter(120);
 
 export async function handlePreferences(request: Request, dependencies: Options = {}): Promise<Response> {
   const env = dependencies.env ?? process.env;
@@ -30,7 +29,7 @@ export async function handlePreferences(request: Request, dependencies: Options 
     if (!config) throw new ApiError(503, "setup_required");
     if (request.method === "POST" && (request.headers.get("origin") !== config.origin || request.headers.get("sec-fetch-site") === "cross-site")) throw new ApiError(403, "csrf");
     const { user, guilds } = await authenticatedMember(request, config, dependencies);
-    if (!(dependencies.limit ?? browserLimit)(user.id)) throw new ApiError(429, "rate_limited");
+    if (!await (dependencies.limit ? dependencies.limit(user.id) : enforceRateLimit(`preferences:${user.id}`, 60, env))) throw new ApiError(429, "rate_limited");
     let guildId: unknown;
     let backgroundId: unknown;
     const params = new URL(request.url).searchParams;
@@ -42,7 +41,7 @@ export async function handlePreferences(request: Request, dependencies: Options 
       const body = await boundedJson(request);
       if (typeof body !== "object" || body === null || Array.isArray(body) || Object.keys(body).length !== 2 || !("guildId" in body) || !("backgroundId" in body)) throw new ApiError(400, "invalid_body");
       ({ guildId, backgroundId } = body);
-      if (backgroundId !== null && !findBackground(backgroundId) && !imageId(backgroundId)) throw new ApiError(400, "invalid_background");
+      if (backgroundId !== null && !(findBackground(backgroundId)?.image) && !imageId(backgroundId)) throw new ApiError(400, "invalid_background");
     }
     if (!snowflake(guildId)) throw new ApiError(400, "invalid_guild");
     verifyBotGuild(guildId, env);
@@ -50,7 +49,7 @@ export async function handlePreferences(request: Request, dependencies: Options 
     const store = dependencies.store ?? preferenceStore(env, dependencies.fetch);
     if (request.method === "GET") {
       const id = await store.get(user.id, guildId);
-      const effective = findBackground(id) ? id : imageId(id) && await resolveSelection(store, user.id, guildId, id, dependencies) ? id : null;
+      const effective = findBackground(id)?.image ? id : imageId(id) && await resolveSelection(store, user.id, guildId, id, dependencies) ? id : null;
       return privateJson({ status: "ready", backgroundId: effective });
     }
     if (backgroundId === null) {
@@ -68,7 +67,7 @@ export async function handleBotPreferences(request: Request, dependencies: Optio
   try {
     if (request.method !== "GET") throw new ApiError(405, "method_not_allowed");
     verifyBearer(request, env);
-    if (!(dependencies.limit ?? serviceLimit)("bot")) throw new ApiError(429, "rate_limited");
+    if (!await (dependencies.limit ? dependencies.limit("bot") : enforceRateLimit("bot-preferences:bot", 120, env))) throw new ApiError(429, "rate_limited");
     const params = new URL(request.url).searchParams;
     const guildId = params.get("guildId");
     const userId = params.get("userId");
@@ -81,6 +80,7 @@ export async function handleBotPreferences(request: Request, dependencies: Optio
       return privateJson({ status: "ready", backgroundId: image ? id : null, background: image ? { id, kind: image.kind, revision: image.revision, mime: image.mime, width: image.width, height: image.height, slot: image.slot } : null });
     }
     const background = findBackground(id);
-    return privateJson({ status: "ready", backgroundId: background?.id ?? null, background: background ? { id: background.id, color: background.color } : null });
+    const media = background ? catalogMedia[background.id] : undefined;
+    return privateJson({ status: "ready", backgroundId: background && media ? background.id : null, background: background && media ? { id: background.id, kind: "catalog-image", mime: media.mime, width: media.width, height: media.height } : null });
   } catch (error) { return apiFailure(error); }
 }

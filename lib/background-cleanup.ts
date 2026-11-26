@@ -1,6 +1,6 @@
 import { ApiError, type Environment } from "./api-security.ts";
 import { BACKGROUND_BUCKET, type BackgroundStorage } from "./background-storage.ts";
-import { createSupabaseAdminClient } from "./supabase.ts";
+import { createDatabaseClient, createAdminClient, supabaseConfig } from "./supabase.ts";
 
 if (typeof window !== "undefined") throw new Error("Server-only module");
 
@@ -8,6 +8,7 @@ type RpcClient = { rpc(name: string, args: Record<string, unknown>): PromiseLike
 type Job = { object_key: string; claim_token: string };
 export type CleanupOptions = {
   env?: Environment;
+  fetch?: typeof fetch;
   batchSize?: number;
   client?: RpcClient;
   storage?: Pick<BackgroundStorage, "delete">;
@@ -25,12 +26,22 @@ export async function cleanupBackgrounds(options: CleanupOptions = {}) {
   const batchSize = options.batchSize ?? 20;
   if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 20) throw new ApiError(400, "invalid_batch_size");
   const env = options.env ?? process.env;
-  const admin = !options.client || !options.storage ? createSupabaseAdminClient(env) : undefined;
-  const client: RpcClient = options.client ?? admin!;
+  let database: RpcClient | undefined;
+  let admin: ReturnType<typeof createAdminClient> | undefined;
+
+  const config = supabaseConfig(env);
+  const client: RpcClient = options.client ?? {
+    rpc(name, args) {
+      database ??= createDatabaseClient(env, options.fetch);
+      return database.rpc(name, args);
+    },
+  };
   const storage = options.storage ?? {
     async delete(key: string) {
-      const { error } = await admin!.storage.from(BACKGROUND_BUCKET).remove([key]);
-      if (error && String(error.statusCode) !== "404") throw new ApiError(503, "storage_unavailable");
+      if (!config) throw new ApiError(503, "storage_unavailable");
+      admin ??= createAdminClient(env, options.fetch);
+      const { error } = await admin.storage.from(BACKGROUND_BUCKET).remove([key]);
+      if (error && String(error.statusCode ?? error) !== "404") throw new ApiError(503, "storage_unavailable");
     },
   };
   const counts = { reclaimed: 0, claimed: 0, deleted: 0, acknowledged: 0, rescheduled: 0, skipped: 0, failed: 0 };

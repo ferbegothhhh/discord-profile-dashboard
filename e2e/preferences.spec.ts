@@ -11,7 +11,7 @@ async function mockSession(page: Page) {
     user: { id: account, username: "mock-account", name: account },
     guilds: [{ id: guildA, name: "Server A" }, { id: guildB, name: "Server B" }],
   } }));
-  return (id: string) => { account = id; };
+  return { getAccount: () => account, switchAccount: (id: string) => { account = id; } };
 }
 
 async function chooseGuild(page: Page, id = guildA) {
@@ -26,40 +26,44 @@ async function settleLate(route: Route, backgroundId: string | null, state = "re
 }
 
 test("remote null, account and guild isolation never import or overwrite anonymous draft", async ({ page }) => {
-  const switchAccount = await mockSession(page);
+  const { getAccount, switchAccount } = await mockSession(page);
+  const originalAccount = getAccount();
   const writes: unknown[] = [];
-  await page.addInitScript((key) => localStorage.setItem(key, JSON.stringify({ version: 1, backgroundId: "sample-plum" })), draftKey);
+  await page.addInitScript((key) => localStorage.setItem(key, JSON.stringify({ version: 1, backgroundId: "catalog-background-2" })), draftKey);
   await page.route("**/api/preferences**", (route) => {
     if (route.request().method() === "POST") {
       writes.push(route.request().postDataJSON());
       return route.fulfill({ json: { status: "saved" } });
     }
     const id = new URL(route.request().url()).searchParams.get("guildId");
-    return route.fulfill({ json: { status: "ready", backgroundId: id === guildA ? "sample-violet" : null } });
+    return route.fulfill({ json: { status: "ready", backgroundId: getAccount() === originalAccount && id === guildA ? "catalog-background-2" : null } });
   });
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Simpan draft lokal" })).toBeDisabled();
   await chooseGuild(page);
-  await expect(selected(page, "Violet")).toBeVisible();
+  await expect(selected(page, "Background 2")).toBeVisible();
+  await expect(selected(page, "Background 2").locator(".swatch-color")).toHaveCSS("background-image", /\/background2\.jpeg["']?\)$/);
+  await expect(page.getByRole("button", { name: "Background 1 Bawaan" }).locator(".swatch-color")).toHaveCSS("background-image", /\/background1\.jpeg["']?\)$/);
   await expect(page.getByRole("button", { name: "Simpan online" })).toBeDisabled();
   await chooseGuild(page, guildB);
   await expect(status(page)).toContainText("Belum ada pilihan online");
-  await expect(selected(page, "Karbon")).toBeVisible();
+  await expect(selected(page, "Background 1")).toBeVisible();
   await expect(page.getByRole("button", { name: "Simpan online" })).toBeEnabled();
-  await page.getByRole("button", { name: "Plum Solid" }).click();
+  await page.getByRole("button", { name: "Background 2 Bawaan" }).click();
+  await expect(selected(page, "Background 2")).toBeVisible();
   switchAccount("456789012345678901");
   await page.getByRole("button", { name: "Muat ulang server" }).click();
   await expect(page.getByLabel("Server keanggotaan kamu")).toHaveValue("");
-  await expect(selected(page, "Karbon")).toBeVisible();
-  await chooseGuild(page, guildB);
+  await expect(selected(page, "Background 1")).toBeVisible();
+  await chooseGuild(page, guildA);
   await expect(status(page)).toContainText("Belum ada pilihan online");
-  await expect(selected(page, "Karbon")).toBeVisible();
+  await expect(selected(page, "Background 1")).toBeVisible();
   expect(writes).toEqual([]);
-  expect(await page.evaluate((key) => localStorage.getItem(key), draftKey)).toBe(JSON.stringify({ version: 1, backgroundId: "sample-plum" }));
+  expect(await page.evaluate((key) => localStorage.getItem(key), draftKey)).toBe(JSON.stringify({ version: 1, backgroundId: "catalog-background-2" }));
   await page.route("**/api/auth/logout", (route) => route.fulfill({ json: { status: "signed_out" } }));
   await page.getByRole("button", { name: "Logout Discord" }).click();
   await expect(status(page)).toContainText("Draft dimuat dari browser");
-  await expect(selected(page, "Plum")).toBeVisible();
+  await expect(selected(page, "Background 2")).toBeVisible();
   await expect(page.getByRole("button", { name: "Simpan draft lokal" })).toBeDisabled();
   expect(writes).toEqual([]);
 });
@@ -74,31 +78,32 @@ test("late GET cannot restore a previous guild selection", async ({ page }) => {
   await page.goto("/");
   await chooseGuild(page);
   await expect(status(page)).toContainText("Memuat preferensi online");
-  await expect(page.getByRole("button", { name: "Violet Solid" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Background 2 Bawaan" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Reset pilihan" })).toBeDisabled();
   await chooseGuild(page, guildB);
   await expect(status(page)).toContainText("Belum ada pilihan online");
   expect(late).toBeDefined();
-  await settleLate(late!, "sample-violet");
-  await expect(selected(page, "Karbon")).toBeVisible();
+  await settleLate(late!, "catalog-background-2");
+  await expect(selected(page, "Background 1")).toBeVisible();
   await expect(status(page)).toContainText("Belum ada pilihan online");
 });
 
 for (const action of ["save", "reset"] as const) {
   test(`late ${action} after account/guild switch is ignored, controls lock while pending`, async ({ page }) => {
-    const switchAccount = await mockSession(page);
+    const { getAccount, switchAccount } = await mockSession(page);
+    const originalAccount = getAccount();
     let late: Route | undefined;
     await page.route("**/api/preferences**", (route) => {
       if (route.request().method() === "POST") { late = route; return; }
-      return route.fulfill({ json: { status: "ready", backgroundId: "sample-plum" } });
+      return route.fulfill({ json: { status: "ready", backgroundId: getAccount() === originalAccount ? "catalog-background-1" : "catalog-background-2" } });
     });
     await page.goto("/");
     await chooseGuild(page);
-    await expect(selected(page, "Plum")).toBeVisible();
-    if (action === "save") await page.getByRole("button", { name: "Violet Solid" }).click();
+    await expect(selected(page, "Background 1")).toBeVisible();
+    if (action === "save") await page.getByRole("button", { name: "Background 2 Bawaan" }).click();
     await page.getByRole("button", { name: action === "save" ? "Simpan online" : "Reset pilihan" }).click();
     await expect(page.getByRole("button", { name: "Memproses…" })).toBeDisabled();
-    await expect(page.getByRole("button", { name: "Karbon Solid" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: action === "save" ? "Background 1 Bawaan" : "Background 2 Bawaan" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Reset pilihan" })).toBeDisabled();
     if (action === "save") {
       await chooseGuild(page, guildB);
@@ -110,9 +115,9 @@ for (const action of ["save", "reset"] as const) {
     }
     await expect(status(page)).toContainText("Pilihan dimuat dari Supabase/cloud");
     expect(late).toBeDefined();
-    expect(late!.request().postDataJSON()).toEqual({ guildId: guildA, backgroundId: action === "save" ? "sample-violet" : null });
-    await settleLate(late!, action === "save" ? "sample-violet" : null, action === "save" ? "saved" : "reset");
-    await expect(selected(page, "Plum")).toBeVisible();
+    expect(late!.request().postDataJSON()).toEqual({ guildId: guildA, backgroundId: action === "save" ? "catalog-background-2" : null });
+    await settleLate(late!, action === "save" ? "catalog-background-2" : null, action === "save" ? "saved" : "reset");
+    await expect(selected(page, action === "save" ? "Background 1" : "Background 2")).toBeVisible();
     await expect(status(page)).toContainText("Pilihan dimuat dari Supabase/cloud");
     await expect(page.getByRole("button", { name: "Simpan online" })).toBeDisabled();
   });
@@ -143,7 +148,7 @@ test("unknown remote ID has safe fallback and no saved claim, then retries", asy
   await page.goto("/");
   await chooseGuild(page);
   await expect(status(page)).toContainText("tidak dikenal");
-  await expect(selected(page, "Karbon")).toBeVisible();
+  await expect(selected(page, "Background 1")).toBeVisible();
   await expect(page.getByRole("button", { name: "Simpan online" })).toBeDisabled();
   id = null;
   await page.getByRole("button", { name: "Muat ulang preferensi" }).click();
@@ -164,17 +169,17 @@ test("mobile cloud save and reset retry retain actual saved state with all brows
   let fail = true;
   const writes: unknown[] = [];
   await page.route("**/api/preferences**", (route) => {
-    if (route.request().method() !== "POST") return route.fulfill({ json: { status: "ready", backgroundId: "sample-plum" } });
+    if (route.request().method() !== "POST") return route.fulfill({ json: { status: "ready", backgroundId: "catalog-background-1" } });
     const body = route.request().postDataJSON();
     writes.push(body);
     return route.fulfill(fail ? { status: body.backgroundId === null ? 403 : 503, json: { error: "mock" } } : { json: { status: body.backgroundId === null ? "reset" : "saved" } });
   });
   await page.goto("/");
   await chooseGuild(page);
-  await expect(selected(page, "Plum")).toBeVisible();
-  const violet = page.getByRole("button", { name: "Violet Solid" });
-  await violet.focus();
-  await expect(violet).toHaveCSS("outline-style", "solid");
+  await expect(selected(page, "Background 1")).toBeVisible();
+  const background2 = page.getByRole("button", { name: "Background 2 Bawaan" });
+  await background2.focus();
+  await expect(background2).toHaveCSS("outline-style", "solid");
   await page.keyboard.press("Enter");
   await page.getByRole("button", { name: "Simpan online" }).click();
   await expect(status(page)).toContainText("Belum berhasil menyimpan online");
@@ -188,14 +193,14 @@ test("mobile cloud save and reset retry retain actual saved state with all brows
   await page.getByRole("button", { name: "Reset pilihan" }).click();
   await expect(status(page)).toContainText("Belum berhasil mereset online");
   await expect(status(page)).toContainText("registry bot");
-  await expect(selected(page, "Violet")).toBeVisible();
+  await expect(selected(page, "Background 2")).toBeVisible();
   fail = false;
   await page.getByRole("button", { name: "Reset pilihan" }).click();
   await expect(status(page)).toContainText("Pilihan online direset");
-  await expect(selected(page, "Karbon")).toBeVisible();
+  await expect(selected(page, "Background 1")).toBeVisible();
   await expect(page.getByRole("button", { name: "Simpan online" })).toBeEnabled();
   expect(writes).toEqual([
-    { guildId: guildA, backgroundId: "sample-violet" }, { guildId: guildA, backgroundId: "sample-violet" },
+    { guildId: guildA, backgroundId: "catalog-background-2" }, { guildId: guildA, backgroundId: "catalog-background-2" },
     { guildId: guildA, backgroundId: null }, { guildId: guildA, backgroundId: null },
   ]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

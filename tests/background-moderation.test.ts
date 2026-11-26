@@ -16,7 +16,7 @@ async function request(method = "GET", query = `guildId=${guild}`, origin = env.
 function fixture(permission: Record<string, unknown> = { permissions: "8" }) {
   const calls: string[] = [];
   const dependencies: ModerationDependencies = {
-    env, limit: () => true,
+    env, discordScope: {}, limit: () => true,
     fetch: (async (url) => Response.json(String(url).includes("guilds") ? [{ id: guild, name: "Test", ...permission }] : { id: user, username: "tester" })) as typeof fetch,
     store: {
       async list(g, after) { assert.equal(g, guild); assert.equal(after, ""); calls.push("list"); return [row]; },
@@ -67,7 +67,7 @@ test("session, upstream failures, CSRF, registry, query validation and limits fa
   const f = fixture();
   assert.equal((await handleModeration(new Request("https://dashboard.example/?guildId=" + guild), undefined, f.dependencies)).status, 401);
   for (const fetcher of [(async () => { throw new Error("private-secret"); }) as typeof fetch, (async () => Response.json({}, { status: 500 })) as typeof fetch, (async () => new Response("private-secret", { status: 429, headers: { "Retry-After": "120" } })) as typeof fetch, (async () => new Response("private-secret")) as typeof fetch, (async () => Response.json({})) as typeof fetch]) {
-    const response = await handleModeration(await request("POST"), id, { ...f.dependencies, fetch: fetcher });
+    const response = await handleModeration(await request("POST"), id, { ...f.dependencies, discordScope: {}, fetch: fetcher });
     assert.equal(response.status, 503);
     assert.doesNotMatch(await response.text(), /private-secret/);
   }

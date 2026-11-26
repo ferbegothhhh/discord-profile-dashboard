@@ -1,15 +1,15 @@
 import { authConfig, authenticatedMember, type Dependencies } from "./auth.ts";
-import { ApiError, apiFailure, createProcessLimiter, privateJson, verifyBotGuild, snowflake } from "./api-security.ts";
+import { ApiError, apiFailure, privateJson, verifyBotGuild, snowflake } from "./api-security.ts";
 import { customSlots, isCustomSlot, type CustomSlot } from "./background-policy.ts";
 import { getCurrentLevel } from "./bot-level.ts";
-import { createSupabaseAdminClient } from "./supabase.ts";
+import { createDatabaseClient } from "./supabase.ts";
+import { enforceRateLimit } from "./shared-rate-limit.ts";
 
 export type BackgroundLibraryDependencies = Dependencies & {
   getLevel?: typeof getCurrentLevel;
   listBackgrounds?: (userId: string, guildId: string) => Promise<unknown>;
 };
 type Background = { id: string; name: string; status: "processing" | "ready" | "failed"; revision: number; isActive: boolean };
-const browserLimit = createProcessLimiter(60);
 
 function metadata(rows: unknown): Map<CustomSlot, Background> {
   if (!Array.isArray(rows) || rows.length > 3) throw new ApiError(503, "database_unavailable");
@@ -32,7 +32,7 @@ export async function handleBackgroundLibrary(request: Request, dependencies: Ba
     const config = authConfig(env);
     if (!config) throw new ApiError(503, "setup_required");
     const { user, guilds } = await authenticatedMember(request, config, dependencies);
-    if (!(dependencies.limit ?? browserLimit)(user.id)) throw new ApiError(429, "rate_limited");
+    if (!await (dependencies.limit ? dependencies.limit(user.id) : enforceRateLimit(`background-library:${user.id}`, 60, env))) throw new ApiError(429, "rate_limited");
     const params = new URL(request.url).searchParams;
     const guildId = params.get("guildId");
     if ([...params.keys()].some((key) => key !== "guildId") || params.getAll("guildId").length !== 1 || !snowflake(guildId)) throw new ApiError(400, "invalid_guild");
@@ -41,7 +41,7 @@ export async function handleBackgroundLibrary(request: Request, dependencies: Ba
     const snapshot = await (dependencies.getLevel ?? getCurrentLevel)(user.id, guildId, env, dependencies.fetch);
     if (!snapshot || snapshot.userId !== user.id || snapshot.guildId !== guildId || !Number.isSafeInteger(snapshot.level) || snapshot.level < 0) throw new ApiError(503, "level_unavailable");
     const list = dependencies.listBackgrounds ?? (async (userId: string, ownerGuildId: string) => {
-      const { data, error } = await createSupabaseAdminClient(env, dependencies.fetch).from("profile_backgrounds")
+      const { data, error } = await createDatabaseClient(env, dependencies.fetch).from("profile_backgrounds")
         .select("id,name,slot_number,status,is_active,revision")
         .eq("owner_user_id", userId).eq("owner_guild_id", ownerGuildId).eq("visibility", "private").eq("kind", "image").order("slot_number");
       if (error) throw new ApiError(503, "database_unavailable");

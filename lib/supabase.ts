@@ -43,13 +43,64 @@ export function createSupabaseAdminClient(env: Environment = process.env, fetche
     global: { fetch: (input, init) => fetcher(input, { ...init, cache: "no-store", redirect: "error", signal: AbortSignal.timeout(2000) }) },
   });
 }
+export const createAdminClient = createSupabaseAdminClient;
+
+function validDatabaseTokenShape(token: string, role = "profile_dashboard"): boolean {
+  if (token.length > 8192 || /[\r\n]/.test(token)) return false;
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3 || parts.some((part) => !/^[A-Za-z0-9_-]+$/.test(part) || Buffer.from(part, "base64url").toString("base64url") !== part)) return false;
+    const header = JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8"));
+    const claims = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+    const now = Date.now() / 1000;
+    return !!header && typeof header === "object" && !Array.isArray(header) && ["HS256", "RS256", "ES256"].includes(header.alg)
+      && !!claims && typeof claims === "object" && !Array.isArray(claims) && claims.role === role
+      && Number.isSafeInteger(claims.exp) && claims.exp > now
+      && (claims.nbf === undefined || Number.isSafeInteger(claims.nbf) && claims.nbf <= now && claims.nbf < claims.exp);
+  } catch { return false; }
+}
+
+function validPublishableKeyShape(key: string): boolean {
+  if (key.length > 8192 || /[\r\n]/.test(key)) return false;
+  return /^sb_publishable_[A-Za-z0-9_-]{6,8177}$/.test(key) || validDatabaseTokenShape(key, "anon");
+}
+
+export function createDatabaseClient(env: Environment = process.env, fetcher: typeof fetch = fetch) {
+  const mode = env.PROFILE_DATABASE_MODE ?? (env.NODE_ENV === "production" ? undefined : "legacy");
+  if (mode === "legacy" && env.NODE_ENV !== "production") return createSupabaseAdminClient(env, fetcher);
+  if (mode !== "restricted") throw new ApiError(503, "database_unavailable");
+  const token = env.PROFILE_DATABASE_KEY;
+  const apiKey = env.SUPABASE_PUBLISHABLE_KEY;
+  let url: URL;
+  try { url = new URL(env.SUPABASE_URL ?? ""); }
+  catch { throw new ApiError(503, "database_unavailable"); }
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || url.pathname !== "/"
+    || !apiKey || !validPublishableKeyShape(apiKey)
+    || !token || !validDatabaseTokenShape(token)) throw new ApiError(503, "database_unavailable");
+  return createClient(url.origin, apiKey, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    accessToken: async () => token,
+    global: {
+      fetch: (input, init) => {
+        if (!validDatabaseTokenShape(token)) throw new ApiError(503, "database_unavailable");
+        const headers = new Headers(init?.headers);
+        headers.set("apikey", apiKey);
+        headers.set("Authorization", `Bearer ${token}`);
+        return fetcher(input, { ...init, headers, cache: "no-store", redirect: "error", signal: AbortSignal.timeout(2000) });
+      },
+    },
+  });
+}
+
 export function preferenceStore(env: Environment = process.env, fetcher: typeof fetch = fetch): PreferenceStore {
-  const client = createSupabaseAdminClient(env, fetcher);
+  const client = createDatabaseClient(env, fetcher);
   const active = async (id: string): Promise<boolean> => {
-    if (!findBackground(id)) return false;
-    const { data, error } = await client.from("profile_backgrounds").select("id,asset_key,color").eq("id", id).eq("is_active", true).maybeSingle();
+    const background = findBackground(id);
+    if (!background) return false;
+    const { data, error } = await client.from("profile_backgrounds").select("id,asset_key,color,kind").eq("id", id).eq("is_active", true).maybeSingle();
     if (error) throw new ApiError(503, "database_unavailable");
-    return !!data && data.id === id && data.asset_key === id && data.color === findBackground(id)?.color;
+    if (!data || data.id !== id || data.asset_key !== id) return false;
+    return background.image ? data.kind === "catalog-image" && data.color === null : data.color === background.color;
   };
   const resolveImage = async (userId: string, guildId: string, id: string): Promise<PreferenceImage | null> => {
     if (!imageId(id)) return null;

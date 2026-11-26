@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 const guild = "223456789012345678";
 const other = "323456789012345678";
@@ -46,7 +46,9 @@ test("moderation review, cancel, disable, pagination and denied retry on mobile"
   await page.getByRole("button", { name: "Halaman berikutnya" }).click();
   await expect(page.getByText("Belum ada background siap ditinjau pada halaman ini.")).toBeVisible();
   await page.getByRole("button", { name: "Halaman pertama" }).click();
-  await expect(page.getByText(`Pemilik ${other}, slot 1: Nonaktif`)).toBeVisible();
+  const row = page.getByRole("row").filter({ has: page.getByRole("cell", { name: other, exact: true }) });
+  await expect(row.getByRole("cell", { name: "Slot 1", exact: true })).toBeVisible();
+  await expect(row.getByRole("cell", { name: "Nonaktif", exact: true })).toBeVisible();
   denied = true;
   await page.getByRole("button", { name: "Muat ulang moderasi" }).click();
   await expect(page.getByText("Daftar moderasi gagal dimuat.", { exact: false })).toBeVisible();

@@ -26,7 +26,13 @@ BEGIN
     WHERE oid IN ('public.profile_backgrounds'::regclass, 'public.profile_preferences'::regclass)
       AND NOT relrowsecurity)
     OR EXISTS (SELECT 1 FROM pg_policy
-      WHERE polrelid IN ('public.profile_backgrounds'::regclass, 'public.profile_preferences'::regclass)) THEN
+      WHERE polrelid IN ('public.profile_backgrounds'::regclass, 'public.profile_preferences'::regclass)
+         AND NOT (polroles = ARRAY['profile_dashboard'::regrole::oid]
+           AND polpermissive
+           AND ((polrelid = 'public.profile_backgrounds'::regclass AND polname = 'profile_dashboard_background_read' AND polcmd = 'r')
+             OR (polrelid = 'public.profile_preferences'::regclass AND (polname, polcmd) IN (
+               ('profile_dashboard_preference_select', 'r'), ('profile_dashboard_preference_insert', 'a'),
+               ('profile_dashboard_preference_update', 'w'), ('profile_dashboard_preference_delete', 'd')))))) THEN
     RAISE EXCEPTION 'Profile tables must have backend-only RLS';
   END IF;
   FOREACH role_name IN ARRAY ARRAY['anon', 'authenticated'] LOOP

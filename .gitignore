@@ -20,6 +20,9 @@ coverage/
 credentials*.json
 service-account*.json
 supabase/Screenshot*.png
+supabase/.temp/
+/ss/
+/ui/
 .opencode/
 .DS_Store
 Thumbs.db

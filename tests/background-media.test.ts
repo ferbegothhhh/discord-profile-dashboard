@@ -62,6 +62,17 @@ test("session, method, registry, membership and limiter gate all data access", a
   assert.deepEqual(f.events, []);
 });
 
+test("async false limiter blocks level, database and storage without Promise truthiness bypass", async () => {
+  const f = fixture();
+  f.dependencies.limit = async (key) => {
+    assert.equal(key, user);
+    await Promise.resolve();
+    return false;
+  };
+  await failure(await handleBackgroundMedia(await browser(), id, f.dependencies), 429, "rate_limited");
+  assert.deepEqual(f.events, []);
+});
+
 test("strict UUID and exact required guildId and revision reject ambiguous input", async () => {
   const f = fixture();
   for (const path of ["", "builtin", `${id}/`, ` ${id}`, id.replace("-4ce0-", "-0ce0-"), id.replace("-9af7-", "-7af7-")]) {

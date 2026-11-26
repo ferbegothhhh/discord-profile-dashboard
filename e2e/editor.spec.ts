@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 test("selection, search, category, save, restore, reset and keyboard", async ({ page }) => {
   const errors: string[] = [];
@@ -7,29 +7,40 @@ test("selection, search, category, save, restore, reset and keyboard", async ({ 
   await page.keyboard.press("Tab");
   await expect(page.getByRole("link", { name: "Lewati ke editor" })).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("button", { name: "Karbon Dipilih" })).toBeVisible();
-  const violet = page.getByRole("button", { name: "Violet Solid" });
-  await violet.focus();
+  await expect(page.getByRole("button", { name: "Background 1 Dipilih" })).toBeVisible();
+  const second = page.getByRole("button", { name: "Background 2 Bawaan" });
+  await expect(second).toBeEnabled();
+  await second.focus();
   await page.keyboard.press("Space");
-  await expect(page.getByRole("button", { name: "Violet Dipilih" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "Background 2 Dipilih" })).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("button", { name: "Simpan draft lokal" }).click();
   await expect(page.locator(".save-status")).toContainText("berhasil disimpan hanya di browser ini");
+  expect(await page.evaluate(() => localStorage.getItem("profile-dashboard:draft:v1"))).toBe(JSON.stringify({ version: 1, backgroundId: "catalog-background-2" }));
   await page.reload();
-  await expect(page.getByRole("button", { name: "Violet Dipilih" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Background 2 Dipilih" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Simpan draft lokal" })).toBeDisabled();
-  await page.getByLabel("Cari background").fill("tidak-ada");
-  await expect(page.getByText("Tidak ada warna yang cocok.", { exact: false })).toBeVisible();
+  const search = page.getByLabel("Cari background");
+  const category = page.getByLabel("Kategori", { exact: true });
+  const swatches = page.locator("#catalog .swatch");
+  await search.fill("tidak-ada");
+  await expect(page.getByText("Tidak ada background yang cocok.", { exact: false })).toBeVisible();
   await page.getByRole("button", { name: "Hapus filter" }).click();
-  await page.getByLabel("Kategori", { exact: true }).selectOption("Netral");
-  await expect(page.getByRole("button", { name: "Violet Dipilih" })).toHaveCount(0);
+  await category.selectOption("Katalog");
+  await expect(category).toHaveValue("Katalog");
+  await expect(swatches).toHaveCount(2);
+  await search.fill("background 1");
+  await expect(swatches).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Background 1 Bawaan" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Background 2 Dipilih" })).toHaveCount(0);
   await page.getByRole("button", { name: "Bersihkan" }).click();
-  await page.getByLabel("Cari background").fill("plum");
-  await expect(page.getByRole("button", { name: "Plum Solid" })).toBeVisible();
-  await page.getByRole("button", { name: "Bersihkan" }).click();
+  await expect(category).toHaveValue("Semua");
+  await expect(search).toHaveValue("");
+  await expect(swatches).toHaveCount(2);
+  await expect(page.getByRole("button", { name: "Background 2 Dipilih" })).toBeVisible();
   await page.getByRole("button", { name: "Reset draft" }).click();
   await expect(page.locator(".save-status")).toContainText("Draft lokal dihapus");
   await page.reload();
-  await expect(page.getByRole("button", { name: "Karbon Dipilih" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Background 1 Dipilih" })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem("profile-dashboard:draft:v1"))).toBeNull();
   expect(errors).toEqual([]);
 });
@@ -43,7 +54,7 @@ test("loading, API failure, retry, empty catalog, reload and invalid response", 
     return route.fulfill({ status: 503, json: {} });
   });
   await page.goto("/");
-  await expect(page.getByText("Memuat katalog sampel…")).toBeVisible();
+  await expect(page.getByText("Memuat katalog gambar…")).toBeVisible();
   await expect(page.locator(".catalog-state[role='alert']")).toContainText("Katalog gagal dimuat");
   state = "empty";
   await page.getByRole("button", { name: "Coba lagi" }).click();
@@ -54,11 +65,45 @@ test("loading, API failure, retry, empty catalog, reload and invalid response", 
   await expect(page.getByRole("button", { name: "Simpan draft lokal" })).toBeDisabled();
 });
 
+for (const upstream of [false, true]) {
+  test(`session cooldown ${upstream ? "Discord" : "dashboard"} waits for manual retry and preserves draft`, async ({ page }) => {
+    let calls = 0;
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.clock.install();
+    await page.addInitScript(() => localStorage.setItem("profile-dashboard:draft:v1", JSON.stringify({ version: 1, backgroundId: "catalog-background-2" })));
+    await page.route("**/api/auth/session", route => {
+      calls++;
+      return route.fulfill(calls === 1 ? { status: upstream ? 502 : 429, headers: { "Retry-After": "601" }, json: { error: upstream ? "discord_unavailable" : "rate_limited", ...(upstream ? { reason: "rate_limited" } : {}) } } : { status: 401, json: { status: "signed_out" } });
+    });
+    await page.goto("/");
+    await expect(page.locator(".auth-panel [role='alert']")).toContainText(upstream ? "Discord membatasi" : "permintaan sesi dashboard");
+    const retry = page.getByRole("button", { name: "Muat ulang Discord" });
+    await expect(retry).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Simpan draft lokal" })).toBeDisabled();
+    await page.clock.fastForward(301000);
+    await expect(retry).toBeDisabled();
+    expect(calls).toBe(1);
+    await page.clock.fastForward(300000);
+    await expect(retry).toBeEnabled();
+    expect(calls).toBe(1);
+    await retry.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("button", { name: "Login dengan Discord" })).toBeVisible();
+    expect(calls).toBe(2);
+    await expect(page.getByRole("button", { name: "Background 2 Dipilih" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Simpan draft lokal" })).toBeDisabled();
+    await page.getByRole("button", { name: "Reset draft" }).click();
+    await expect(page.getByRole("button", { name: "Background 1 Dipilih" })).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+}
+
 test("corrupt draft and blocked storage are explained", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("profile-dashboard:draft:v1", "invalid"));
   await page.goto("/");
   await expect(page.locator(".save-status")).toContainText("Draft lama tidak valid");
-  await expect(page.getByRole("button", { name: "Karbon Dipilih" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Background 1 Dipilih" })).toBeVisible();
   await page.evaluate(() => {
     Storage.prototype.setItem = () => { throw new Error("blocked"); };
     Storage.prototype.removeItem = () => { throw new Error("blocked"); };
@@ -74,7 +119,7 @@ for (const width of [320, 375, 600, 768, 1024, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.goto("/");
-    await expect(page.getByRole("button", { name: "Violet Solid" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Background 2 Bawaan" })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     for (const control of await page.locator("button, input, select").all()) {
       const box = await control.boundingBox();
@@ -95,37 +140,55 @@ for (const reducedMotion of ["reduce", "no-preference"] as const) {
     const preview = page.locator(".profile-preview");
     const search = page.getByLabel("Cari background");
     const category = page.getByLabel("Kategori", { exact: true });
-    const violet = page.getByRole("button", { name: "Violet Solid" });
-    await expect(violet).toBeVisible();
+    const second = page.getByRole("button", { name: "Background 2 Bawaan" });
+    await expect(second).toBeEnabled();
     await expect(search).toHaveAttribute("data-slot", "input");
     await expect(category).toHaveAttribute("data-slot", "native-select");
-    await expect(violet).toHaveAttribute("data-slot", "button");
-    await expect(violet).toHaveAttribute("data-size", "swatch");
-    await expect(preview).toHaveCSS("background-color", "rgb(32, 32, 36)");
+    await expect(second).toHaveAttribute("data-slot", "button");
+    await expect(second).toHaveAttribute("data-size", "swatch");
+    await expect(preview).toHaveCSS("background-image", /\/background1\.jpeg"?\)$/);
+    await expect(preview).toHaveCSS("background-size", "cover");
+    await expect(preview).toHaveCSS("background-position", "50% 50%");
     await expect(preview).toHaveCSS("transform", "none");
+    for (const [name, file, width, height] of [
+      ["Background 1 Dipilih", "background1.jpeg", 735, 415],
+      ["Background 2 Bawaan", "background2.jpeg", 736, 414],
+    ] as const) {
+      const thumbnail = page.getByRole("button", { name }).locator(".swatch-color");
+      await expect(thumbnail).toBeVisible();
+      const image = await thumbnail.evaluate(async (element) => {
+        const src = getComputedStyle(element).backgroundImage.match(/^url\("?(.*?)"?\)$/)?.[1];
+        if (!src) return null;
+        const bitmap = new Image();
+        bitmap.src = src;
+        await bitmap.decode();
+        return { pathname: new URL(bitmap.src).pathname, width: bitmap.naturalWidth, height: bitmap.naturalHeight };
+      });
+      expect(image).toEqual({ pathname: `/${file}`, width, height });
+    }
     const save = page.getByRole("button", { name: "Simpan draft lokal" });
     await expect(save).toHaveAttribute("data-variant", "default");
     await expect(save).toHaveCSS("background-color", "rgb(119, 64, 214)");
-    await violet.focus();
-    await expect(violet).toHaveCSS("outline-style", "solid");
+    await second.focus();
+    await expect(second).toHaveCSS("outline-style", "solid");
     await page.keyboard.press("Enter");
-    await expect(preview).toHaveCSS("background-color", "rgb(73, 50, 96)");
-    await expect(page.locator(".draft-summary")).toContainText("Violet");
+    await expect(preview).toHaveCSS("background-image", /\/background2\.jpeg"?\)$/);
+    await expect(page.locator(".draft-summary")).toContainText("Background 2");
     if (reducedMotion === "reduce") {
-      await page.getByRole("button", { name: "Plum Solid" }).click();
+      await page.getByRole("button", { name: "Background 1 Bawaan" }).click();
       const frames = await preview.evaluate(async (element) => {
-        const colors: string[] = [];
+        const images: string[] = [];
         for (let index = 0; index < 4; index++) {
           await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-          colors.push(getComputedStyle(element).backgroundColor);
+          images.push(getComputedStyle(element).backgroundImage);
         }
-        return colors;
+        return images;
       });
-      expect(frames).toEqual(Array(4).fill("rgb(53, 36, 66)"));
+      expect(frames).toEqual(Array(4).fill(expect.stringMatching(/\/background1\.jpeg"?\)$/)));
       await expect(search).toHaveCSS("transition-duration", "0s");
     }
     await page.getByRole("button", { name: "Reset draft" }).click();
-    await expect(preview).toHaveCSS("background-color", "rgb(32, 32, 36)");
+    await expect(preview).toHaveCSS("background-image", /\/background1\.jpeg"?\)$/);
     expect(errors).toEqual([]);
   });
 }
@@ -135,5 +198,12 @@ test("safe health and sample catalog APIs", async ({ request }) => {
   expect(health.ok()).toBe(true);
   expect(await health.json()).toEqual({ status: "ok", mode: "local-draft", integrations: { discord: "setup-required", supabase: "not-connected", bot: "not-connected" } });
   const catalog = await request.get("/api/catalog");
-  expect((await catalog.json()).source).toBe("sample-solid-swatches");
+  expect(catalog.ok()).toBe(true);
+  expect(await catalog.json()).toEqual({
+    source: "sample-solid-swatches",
+    backgrounds: [
+      { id: "catalog-background-1", name: "Background 1", image: "/background1.jpeg", category: "Katalog" },
+      { id: "catalog-background-2", name: "Background 2", image: "/background2.jpeg", category: "Katalog" },
+    ],
+  });
 });

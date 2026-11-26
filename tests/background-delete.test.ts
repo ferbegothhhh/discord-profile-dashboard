@@ -20,7 +20,7 @@ function fixture() {
   const queued: string[] = [];
   let exists = true;
   const dependencies: BackgroundDeleteDependencies = {
-    env, fetch: fetcher, limit: (id) => { assert.equal(id, user); return true; },
+    env, discordScope: {}, fetch: fetcher, limit: (id) => { assert.equal(id, user); return true; },
     store: { async deleteSlot(owner) {
       assert.deepEqual(owner, { userId: user, guildId: guild, slot: 3 });
       events.push("store");

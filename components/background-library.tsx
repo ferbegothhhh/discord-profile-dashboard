@@ -21,6 +21,19 @@ function validLibrary(value: unknown, guildId: string): value is Library {
   });
 }
 
+export function responseRetrySeconds(response: Response): number | null {
+  const raw = response.headers.get("Retry-After");
+  const value = raw && raw.length <= 128 && /^\d+(\.\d+)?$/.test(raw) ? Number(raw) : NaN;
+  return Number.isFinite(value) && value > 0 ? Math.min(86400, Math.max(1, Math.ceil(value))) : null;
+}
+
+export async function discordResponseError(response: Response): Promise<string | null> {
+  const data = await response.clone().json().catch(() => null);
+  if (data?.error !== "discord_unavailable") return null;
+  const seconds = responseRetrySeconds(response);
+  return `${data.reason === "rate_limited" ? "Discord membatasi verifikasi akses." : "Verifikasi Discord belum tersedia."}${seconds ? ` Tunggu ${seconds} detik sebelum mencoba lagi.` : " Coba lagi nanti."} Draft tidak diubah; muat ulang untuk memeriksa akses terbaru.`;
+}
+
 function libraryError(status: number, code?: string) {
   if (code === "slot_occupied") return "Slot sudah terisi. Muat ulang library dan hapus gambar lama terlebih dahulu.";
   if (code === "slot_processing") return "Slot masih diproses. Tunggu lalu muat ulang library.";
@@ -54,7 +67,7 @@ export function useBackgroundLibrary(guildId: string | null, enabled: boolean) {
       setData(null);
       try {
         const response = await fetch(`/api/backgrounds?guildId=${encodeURIComponent(guildId!)}`, { cache: "no-store", credentials: "same-origin", signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]) });
-        if (!response.ok) throw new Error(libraryError(response.status));
+        if (!response.ok) throw new Error(await discordResponseError(response) ?? libraryError(response.status));
         const result: unknown = await response.json();
         if (!validLibrary(result, guildId!)) throw new Error("Respons library tidak valid. Coba muat ulang.");
         if (active) { setData(result); setState("ready"); }
@@ -101,8 +114,9 @@ export function BackgroundLibrary({ guildId, library, selectedId, disabled, canS
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]),
         ...(file ? { headers: { "Content-Type": file.type }, body: file } : {}),
       });
+      const discordError = !response.ok ? await discordResponseError(response) : null;
       const result = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(libraryError(response.status, result?.error));
+      if (!response.ok) throw new Error(discordError ?? libraryError(response.status, result?.error));
       if (!result || result.guildId !== guildId || result.slot !== slot.slot || result.status !== (file ? "ready" : "deleted")) throw new Error("Respons perubahan library tidak valid. Muat ulang untuk memeriksa hasilnya.");
       if (controller.signal.aborted) return;
       if (!file && slot.background) onDelete(slot.background.id);
@@ -117,7 +131,7 @@ export function BackgroundLibrary({ guildId, library, selectedId, disabled, canS
     }
   }
 
-  return <section className="private-library" aria-labelledby="library-title" aria-busy={library.state === "loading" || busy !== null}>
+  return <section id="library" className="private-library" aria-labelledby="library-title" aria-busy={library.state === "loading" || busy !== null}>
     <div className="section-heading"><h2 id="library-title">Library pribadi</h2>{library.data && <span className="muted">Level {library.data.level}</span>}</div>
     <p className="muted">Khusus akun dan server ini. PNG, JPG, WebP statis, maksimal 3 MiB. Hasil dipotong tengah ke 1000 × 560. Hapus gambar lama sebelum upload pengganti.</p>
     {library.state === "loading" && <p role="status">Memuat library pribadi…</p>}

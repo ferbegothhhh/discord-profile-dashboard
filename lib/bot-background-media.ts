@@ -1,15 +1,15 @@
 import { type Dependencies } from "./auth.ts";
-import { ApiError, apiFailure, createProcessLimiter, privateHeaders, snowflake, verifyBearer, verifyBotGuild } from "./api-security.ts";
+import { ApiError, apiFailure, privateHeaders, snowflake, verifyBearer, verifyBotGuild } from "./api-security.ts";
 import { canUseCustomSlot } from "./background-policy.ts";
 import { backgroundStorage, type BackgroundStorage } from "./background-storage.ts";
 import { getCurrentLevel } from "./bot-level.ts";
 import { preferenceLevel } from "./preferences.ts";
 import { imageId, preferenceStore, validResolvedImage, type PreferenceStore } from "./supabase.ts";
+import { enforceRateLimit } from "./shared-rate-limit.ts";
 
 if (typeof window !== "undefined") throw new Error("Server-only module");
 
 type Options = Dependencies & { store?: PreferenceStore; getLevel?: typeof getCurrentLevel; storage?: Pick<BackgroundStorage, "download"> };
-const mediaLimit = createProcessLimiter(120);
 const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 
 export async function handleBotBackgroundMedia(request: Request, id: string, dependencies: Options = {}): Promise<Response> {
@@ -17,7 +17,7 @@ export async function handleBotBackgroundMedia(request: Request, id: string, dep
   try {
     if (request.method !== "GET") throw new ApiError(405, "method_not_allowed");
     verifyBearer(request, env);
-    if (!(dependencies.limit ?? mediaLimit)("bot-media")) throw new ApiError(429, "rate_limited");
+    if (!await (dependencies.limit ? dependencies.limit("bot-media") : enforceRateLimit("bot-background-media:bot-media", 120, env))) throw new ApiError(429, "rate_limited");
     if (!imageId(id)) throw new ApiError(400, "invalid_id");
     const params = new URL(request.url).searchParams;
     const userId = params.get("userId");

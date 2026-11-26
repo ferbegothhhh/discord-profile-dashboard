@@ -1,8 +1,9 @@
 import { authConfig, authenticatedMember, type Dependencies } from "./auth.ts";
-import { ApiError, apiFailure, createProcessLimiter, privateHeaders, privateJson, snowflake, verifyBotGuild } from "./api-security.ts";
+import { ApiError, apiFailure, privateHeaders, privateJson, snowflake, verifyBotGuild } from "./api-security.ts";
 import { backgroundStorage, type BackgroundStorage } from "./background-storage.ts";
-import { createSupabaseAdminClient } from "./supabase.ts";
+import { createDatabaseClient } from "./supabase.ts";
 import { MAX_OUTPUT_BYTES } from "./image-processing.ts";
+import { enforceRateLimit } from "./shared-rate-limit.ts";
 
 if (typeof window !== "undefined") throw new Error("Server-only module");
 
@@ -14,11 +15,10 @@ export type ModerationStore = {
 };
 export type ModerationDependencies = Dependencies & { store?: ModerationStore; storage?: Pick<BackgroundStorage, "download"> };
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
-const limit = createProcessLimiter(30);
 const fields = "id,owner_guild_id,owner_user_id,slot_number,is_active,status,kind,visibility";
 
 function store(env: NonNullable<Dependencies["env"]>, fetcher?: typeof fetch): ModerationStore {
-  const client = createSupabaseAdminClient(env, fetcher);
+  const client = createDatabaseClient(env, fetcher);
   const query = (guildId: string, media = false) => client.from("profile_backgrounds").select(media ? `${fields},object_key,byte_size,mime` : fields).eq("owner_guild_id", guildId).eq("kind", "image").eq("visibility", "private").eq("status", "ready");
   return {
     async list(guildId, after) {
@@ -53,7 +53,7 @@ export async function handleModeration(request: Request, id?: string, dependenci
     if (!config) throw new ApiError(503, "setup_required");
     if (mutation && (request.headers.get("origin") !== config.origin || request.headers.get("sec-fetch-site") === "cross-site")) throw new ApiError(403, "csrf");
     const { user, guilds } = await authenticatedMember(request, config, dependencies);
-    if (!(dependencies.limit ?? limit)(user.id)) throw new ApiError(429, "rate_limited");
+    if (!await (dependencies.limit ? dependencies.limit(user.id) : enforceRateLimit(`background-moderation:${user.id}`, 30, env))) throw new ApiError(429, "rate_limited");
     const params = new URL(request.url).searchParams;
     const guildId = params.get("guildId");
     const after = params.get("after") ?? "";

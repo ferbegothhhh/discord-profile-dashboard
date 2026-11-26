@@ -22,29 +22,34 @@ test("design tokens preserve AA text and control contrast", () => {
     assert.ok(value, `Missing color token ${name}`);
     return value;
   };
-  const surfaces = [token("background"), token("surface"), "#303036", "#414148"];
+  const surfaces = [token("background"), token("surface"), "#303036", "#414148", "#151519", "#18181d", "#202026", "#342347", "#2d233c", "#24242b", "#131316"];
+  assert.ok(contrast("#e5d5ff", "#342347") >= 4.5);
+  assert.ok(contrast(token("selected"), "#2d233c") >= 4.5);
+  for (const surface of ["#202026", "#18181d", "#101013"]) assert.ok(contrast("#777782", surface) >= 3);
   for (const surface of surfaces) {
     for (const text of [token("text"), token("muted")]) assert.ok(contrast(text, surface) >= 4.5, `${text} on ${surface}`);
     assert.ok(contrast(token("border"), surface) >= 3);
     assert.ok(contrast(token("selected"), surface) >= 3);
   }
   for (const surface of [token("accent"), token("color-primary-hover"), token("color-primary-active")]) assert.ok(contrast("#ffffff", surface) >= 4.5);
-  for (const item of backgrounds) assert.ok(contrast(token("text"), item.color) >= 4.5);
+  for (const item of backgrounds) {
+    if (item.color) assert.ok(contrast(token("text"), item.color) >= 4.5);
+  }
 });
 
 test("draft round-trip only accepts allowed sample IDs", () => {
   for (const item of backgrounds) assert.equal(parseDraft(serializeDraft(item.id)), item.id);
   assert.throws(() => serializeDraft("../../private"));
-  assert.equal(findBackground(defaultBackgroundId)?.name, "Karbon");
+  assert.equal(findBackground(defaultBackgroundId)?.name, "Background 1");
 });
 
 test("missing, corrupt, oversized and obsolete drafts are rejected", () => {
-  for (const raw of [null, "{", "null", "[]", "{}", "x".repeat(513), '{"version":2,"backgroundId":"sample-carbon"}', '{"version":1,"backgroundId":"unknown"}', '{"version":1,"backgroundId":123}']) assert.equal(parseDraft(raw), null);
+  for (const raw of [null, "{", "null", "[]", "{}", "x".repeat(513), '{"version":2,"backgroundId":"catalog-background-1"}', '{"version":1,"backgroundId":"unknown"}', '{"version":1,"backgroundId":123}']) assert.equal(parseDraft(raw), null);
 });
 
 test("search trims, ignores case, and combines with category", () => {
-  assert.deepEqual(filterBackgrounds(backgrounds, "  VIOLET ", "Ungu").map((item) => item.id), ["sample-violet"]);
-  assert.equal(filterBackgrounds(backgrounds, "violet", "Netral").length, 0);
+  assert.deepEqual(filterBackgrounds(backgrounds, "  BACKGROUND  ", "Katalog").map((item) => item.id), ["catalog-background-1", "catalog-background-2"]);
+  assert.equal(filterBackgrounds(backgrounds, "background", "Netral").length, 0);
   assert.equal(filterBackgrounds(backgrounds, "", "Semua").length, backgrounds.length);
   assert.equal(filterBackgrounds([], "", "Semua").length, 0);
 });

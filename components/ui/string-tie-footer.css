@@ -1,0 +1,51 @@
+.stt { max-width: none; margin: 0; padding: 0; color: #fff; border-top: 1px solid #36363f; --stt-intro: 1; }
+.stt .stt-layout { max-width: 1080px; margin: auto; padding: 40px 28px 16px; display: grid; grid-template-columns: minmax(180px, .8fr) minmax(0, 1.2fr); align-items: center; gap: 24px; }
+.stt .stt-intro h2 { font: 500 clamp(3rem, 5vw, 5.25rem)/.95 Georgia, serif; letter-spacing: -.055em; margin: 20px 0; }
+.stt .stt-intro h2 em { color: #c5a5ff; font-weight: 400; }
+.stt .stt-meta { color: #d4d0da; font-size: .75rem; }
+.stt .stt-intro > p:not(.stt-meta) { font-size: .95rem; }
+.stt .stt-tape { display: inline-block; margin: 28px 0 0 3px; padding: 5px 16px; transform: rotate(-5deg); color: #101013; background: #f3f1ec; font-size: .8rem; }
+.stt .stt-stage { padding-top: 205px; min-width: 0; }
+.stt .stt-envelope { position: relative; width: 100%; max-width: 600px; margin: auto; aspect-ratio: 600 / 360; isolation: isolate; }
+.stt svg { display: block; width: 100%; height: 100%; stroke-width: 1; }
+.stt .stt-back, .stt .stt-front, .stt .stt-flap, .stt .stt-cord { position: absolute; inset: 0; overflow: visible; }
+.stt .stt-back { z-index: 0; }
+.stt .stt-front { z-index: 3; pointer-events: none; }
+.stt .stt-flap { z-index: var(--stt-flap-layer, 4); transform-origin: 50% 16.6667%; transform: scaleY(var(--stt-flap, 1)); }
+.stt .stt-cord { z-index: 5; touch-action: pan-y; }
+.stt .stt-cord path { stroke-width: 3.2; }
+.stt[data-phase='open'] .stt-cord { touch-action: none; cursor: grab; }
+.stt[data-phase='open'] .stt-cord:active { cursor: grabbing; }
+.stt .stt-note { position: absolute; z-index: 2; top: 18%; left: 10%; width: 80%; min-height: 240px; padding: 22px 24px; color: #101013; background: #fff; visibility: var(--stt-note-visibility, hidden); transform: translateY(calc(var(--stt-note, 0) * var(--stt-note-lift, -205px))); box-shadow: 0 2px 8px #10101320; overflow-wrap: anywhere; }
+.stt .stt-note-meta { display: block; font-size: .65rem; color: #50495b; }
+.stt .stt-note h3 { margin: 9px 0; font: 500 clamp(1.15rem, 2vw, 1.7rem)/1.1 Georgia, serif; }
+.stt .stt-note p { font-size: .85rem; line-height: 1.5; }
+.stt .stt-note a { color: #5827a8; font-size: .8rem; display: inline-flex; align-items: center; min-height: 44px; }
+.stt .stt-note a:focus-visible, .stt .stt-note button:focus-visible { outline-color: #7740d6; }
+.stt .stt-contact { display: flex; gap: 8px; flex-wrap: wrap; }
+.stt .stt-contact button { color: #101013; background: #f3f1ec; border: 1px solid #777; min-height: 44px; }
+.stt .stt-signature { width: 180px; height: 40px; max-width: 100%; color: #101013; }
+.stt .stt-signature text { fill: currentColor; font: italic 34px Georgia, serif; }
+.stt .stt-signature path { fill: none; stroke: currentColor; stroke-dasharray: 300; stroke-dashoffset: calc(300 * (1 - var(--stt-intro))); }
+.stt .stt-seal { position: absolute; z-index: 6; left: calc(50% - 22px); top: calc(33.05% - 22px); width: 44px; height: 44px; padding: 0; border: 1px solid #aaa49b; border-radius: 50%; background: #e2ded7; color: #101013; font: 20px Georgia, serif; transition: opacity 200ms; }
+.stt .stt-seal:focus-visible { outline-color: #7740d6; }
+.stt:not([data-phase='closed']) .stt-seal { opacity: 0; pointer-events: none; }
+.stt .stt-toggle { display: flex; justify-content: space-between; align-items: center; gap: 32px; min-height: 48px; width: max-content; max-width: 100%; margin: 16px auto 0; border: 0; border-bottom: 1px solid #c5a5ff; border-radius: 0; padding: 6px 2px; background: transparent; color: #fff; font-size: .9rem; }
+.stt .stt-toggle span { color: #c5a5ff; font-size: 1.4rem; }
+.stt .stt-bottom { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 24px; margin: 24px 28px 0; padding: 20px 0 24px; border-top: 1px solid #36363f; font-size: .75rem; }
+.stt .stt-links { display: flex; gap: 8px 20px; flex-wrap: wrap; align-items: center; }
+.stt .stt-links a { display: inline-flex; align-items: center; min-height: 44px; color: #fff; }
+@media (max-width: 700px) {
+  .stt .stt-layout { grid-template-columns: minmax(0, 1fr); padding: 36px 16px 16px; gap: 0; }
+  .stt .stt-intro h2 { font-size: clamp(3.4rem, 14vw, 5rem); }
+  .stt .stt-stage { padding-top: 275px; }
+  .stt .stt-note { left: 7%; width: 86%; min-height: 280px; padding: 16px; }
+  .stt .stt-note { --stt-note-lift: -270px; }
+  .stt .stt-note h3 { font-size: 1.25rem; }
+  .stt .stt-note p { font-size: .8rem; }
+  .stt .stt-bottom { margin: 16px 16px 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stt *, .stt *::before, .stt *::after { transition: none !important; animation: none !important; }
+  .stt .stt-signature path { stroke-dashoffset: 0; }
+}

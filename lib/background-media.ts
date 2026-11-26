@@ -1,10 +1,11 @@
 import { authConfig, authenticatedMember, type Dependencies } from "./auth.ts";
-import { ApiError, apiFailure, createProcessLimiter, privateHeaders, snowflake, verifyBotGuild } from "./api-security.ts";
+import { ApiError, apiFailure, privateHeaders, snowflake, verifyBotGuild } from "./api-security.ts";
 import { canUseCustomSlot, isCustomSlot } from "./background-policy.ts";
 import { backgroundStorage, type BackgroundStorage } from "./background-storage.ts";
 import { getCurrentLevel } from "./bot-level.ts";
 import { IMAGE_HEIGHT, IMAGE_WIDTH, MAX_OUTPUT_BYTES } from "./image-processing.ts";
-import { createSupabaseAdminClient } from "./supabase.ts";
+import { createDatabaseClient } from "./supabase.ts";
+import { enforceRateLimit } from "./shared-rate-limit.ts";
 
 if (typeof window !== "undefined") throw new Error("Server-only module");
 
@@ -15,14 +16,13 @@ export type BackgroundMediaDependencies = Dependencies & {
   getLevel?: typeof getCurrentLevel;
   storage?: Pick<BackgroundStorage, "download">;
 };
-const mediaLimit = createProcessLimiter(60);
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const pngSignature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 
 function mediaStore(env: NonNullable<Dependencies["env"]>, fetcher?: typeof fetch): BackgroundMediaStore {
   return {
     async get(owner) {
-      const { data, error } = await createSupabaseAdminClient(env, fetcher).from("profile_backgrounds")
+      const { data, error } = await createDatabaseClient(env, fetcher).from("profile_backgrounds")
         .select("id,kind,visibility,owner_user_id,owner_guild_id,slot_number,revision,status,is_active,mime,width,height,byte_size,object_key")
         .eq("id", owner.id).eq("owner_user_id", owner.userId).eq("owner_guild_id", owner.guildId)
         .eq("kind", "image").eq("visibility", "private").eq("status", "ready").eq("is_active", true).eq("revision", owner.revision).maybeSingle();
@@ -39,7 +39,7 @@ export async function handleBackgroundMedia(request: Request, id: string, depend
     const config = authConfig(env);
     if (!config) throw new ApiError(503, "setup_required");
     const { user, guilds } = await authenticatedMember(request, config, dependencies);
-    if (!(dependencies.limit ?? mediaLimit)(user.id)) throw new ApiError(429, "rate_limited");
+    if (!await (dependencies.limit ? dependencies.limit(user.id) : enforceRateLimit(`background-media:${user.id}`, 60, env))) throw new ApiError(429, "rate_limited");
     if (!uuid.test(id)) throw new ApiError(400, "invalid_id");
     const params = new URL(request.url).searchParams;
     const guildId = params.get("guildId");

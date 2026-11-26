@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { ApiError, type Environment } from "./api-security.ts";
 import { MAX_OUTPUT_BYTES } from "./image-processing.ts";
-import { supabaseConfig } from "./supabase.ts";
+import { supabaseConfig, type SupabaseConfig } from "./supabase.ts";
 
 if (typeof window !== "undefined") throw new Error("Server-only module");
 
@@ -18,7 +18,8 @@ type StorageClient = {
   };
 };
 export type BackgroundStorageOptions = {
-  env: Environment;
+  env?: Environment;
+  config?: SupabaseConfig;
   fetcher?: typeof fetch;
   clientFactory?: (url: string, key: string, options: NonNullable<Parameters<typeof createClient>[2]>) => StorageClient;
   timeoutMs?: number;
@@ -30,8 +31,8 @@ function validPng(input: Buffer) {
   return Buffer.isBuffer(input) && input.length >= pngSignature.length && input.length <= MAX_OUTPUT_BYTES && input.subarray(0, 8).equals(pngSignature);
 }
 
-export function backgroundStorage({ env, fetcher = fetch, clientFactory = createClient, timeoutMs = 5000 }: BackgroundStorageOptions) {
-  const config = supabaseConfig(env);
+export function backgroundStorage({ env = process.env, config: injectedConfig, fetcher = fetch, clientFactory = createClient, timeoutMs = 5000 }: BackgroundStorageOptions) {
+  const config = injectedConfig ?? supabaseConfig(env);
   if (!config || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 5000) throw unavailable();
   const { url, serviceRoleKey } = config;
   const headers = { Authorization: `Bearer ${serviceRoleKey}`, apikey: serviceRoleKey };
@@ -43,8 +44,12 @@ export function backgroundStorage({ env, fetcher = fetch, clientFactory = create
     const deadline = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => { controller.abort(); reject(unavailable()); }, timeoutMs);
     });
-    try { return await Promise.race([operation(controller.signal), deadline]); }
-    catch { throw unavailable(); }
+    try {
+      const result = await Promise.race([operation(controller.signal), deadline]);
+      if (controller.signal.aborted) throw unavailable();
+      return result;
+    }
+    catch (error) { throw error instanceof ApiError ? error : unavailable(); }
     finally { clearTimeout(timer); }
   }
 

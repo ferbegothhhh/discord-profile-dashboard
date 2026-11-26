@@ -54,8 +54,10 @@ test("upload stays unsaved until explicit selection and cloud save, uses raw ima
   expect(mock.posts).toEqual([]);
   expect(mock.uploads[0]).toEqual({ method: "PUT", type: "image/png", bytes: png });
   await page.getByRole("button", { name: "Pilih slot 1", exact: true }).click();
-  await expect(page.getByAltText("Perkiraan background pribadi: Background pribadi 1")).toBeVisible();
-  expect(mock.media[0]).toContain(`/api/backgrounds/${id}/media?guildId=${guildA}&revision=2`);
+  await expect(page.locator(".draft-summary")).toContainText("Background pribadi 1");
+  await expect(page.getByRole("button", { name: "Perbarui preview", exact: true })).toBeEnabled();
+  await expect(page.locator(".preview-stage img")).toHaveCount(0);
+  expect(mock.media).toEqual([]);
   await page.getByRole("button", { name: "Simpan online", exact: true }).click();
   await expect(page.locator(".save-status")).toContainText("Pilihan disimpan");
   expect(mock.posts).toEqual([{ guildId: guildA, backgroundId: id }]);
@@ -92,19 +94,19 @@ test("library error retry and invalid files preserve safe mobile controls", asyn
 });
 
 test("saved custom resolves after library load, reset and guild/logout never leak to anonymous storage", async ({ page }) => {
-  await page.addInitScript((key) => localStorage.setItem(key, JSON.stringify({ version: 1, backgroundId: "sample-plum" })), draftKey);
+  await page.addInitScript((key) => localStorage.setItem(key, JSON.stringify({ version: 1, backgroundId: "catalog-background-2" })), draftKey);
   const mock = await setup(page, { occupied: true, preference: id });
   await expect(page.getByRole("button", { name: "Dipilih slot 1" })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("button", { name: "Simpan online", exact: true })).toBeDisabled();
   await page.getByRole("button", { name: "Reset pilihan", exact: true }).click();
-  await expect(page.getByAltText("Perkiraan background pribadi: Background pribadi 1")).toHaveCount(0);
+  await expect(page.locator(".draft-summary")).not.toContainText("Background pribadi 1");
   await page.getByRole("button", { name: "Pilih slot 1", exact: true }).click();
   await page.getByLabel("Server keanggotaan kamu").selectOption(guildB);
-  await expect(page.getByAltText("Perkiraan background pribadi: Background pribadi 1")).toHaveCount(0);
+  await expect(page.locator(".draft-summary")).not.toContainText("Background pribadi 1");
   await page.getByRole("button", { name: "Logout Discord" }).click();
   await expect(page.getByRole("heading", { name: "Library pribadi" })).toHaveCount(0);
   await expect(page.locator(".save-status")).toContainText("Draft dimuat dari browser");
-  expect(await page.evaluate((key) => localStorage.getItem(key), draftKey)).toBe(JSON.stringify({ version: 1, backgroundId: "sample-plum" }));
+  expect(await page.evaluate((key) => localStorage.getItem(key), draftKey)).toBe(JSON.stringify({ version: 1, backgroundId: "catalog-background-2" }));
   expect(mock.posts).toEqual([{ guildId: guildA, backgroundId: null }]);
 });
 
@@ -139,14 +141,14 @@ for (const fail of [true, false]) {
   });
 }
 
-test("library 503 permits an explicitly selected solid replacement, not the fallback sample", async ({ page }) => {
+test("library 503 permits an explicitly selected catalog replacement, not the fallback image", async ({ page }) => {
   const mock = await setup(page, { preference: id, fail: true });
   await expect(page.locator(".save-status")).toContainText("bukan pilihan tersimpan");
   expect(mock.posts).toEqual([]);
-  await page.getByRole("button", { name: /Plum/ }).click();
+  await page.getByRole("button", { name: "Background 2 Bawaan", exact: true }).click();
   await page.getByRole("button", { name: "Simpan online", exact: true }).click();
   await expect(page.locator(".save-status")).toContainText("Pilihan disimpan");
-  expect(mock.posts).toEqual([{ guildId: guildA, backgroundId: "sample-plum" }]);
+  expect(mock.posts).toEqual([{ guildId: guildA, backgroundId: "catalog-background-2" }]);
   await expect(page.getByRole("button", { name: "Simpan online", exact: true })).toBeDisabled();
 });
 
@@ -171,7 +173,7 @@ for (const status of [401, 403, 503]) {
     await expect(page.getByRole("button", { name: "Muat ulang preferensi" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Reset pilihan", exact: true })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Simpan online", exact: true })).toBeDisabled();
-    await expect(page.getByRole("button", { name: /Plum/ })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Background 2 Bawaan", exact: true })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Pilih slot 1", exact: true })).toBeDisabled();
     expect(mock.posts).toEqual([]);
   });
@@ -183,7 +185,7 @@ test("arbitrary unknown preference stays locked and never claims saved", async (
   await expect(page.locator(".save-status")).not.toContainText("Pilihan disimpan");
   await expect(page.getByRole("button", { name: "Reset pilihan", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Simpan online", exact: true })).toBeDisabled();
-  await expect(page.getByRole("button", { name: /Plum/ })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Background 2 Bawaan", exact: true })).toBeDisabled();
   expect(mock.posts).toEqual([]);
 });
 
@@ -191,7 +193,7 @@ test("initial null preference preserves saving the selected default sample", asy
   const mock = await setup(page);
   await expect(page.locator(".save-status")).toContainText("Belum ada pilihan online");
   await expect(page.getByRole("button", { name: "Simpan online", exact: true })).toBeEnabled();
-  await page.getByRole("button", { name: /Plum/ }).click();
+  await page.getByRole("button", { name: "Background 2 Bawaan", exact: true }).click();
   await expect(page.getByRole("button", { name: "Simpan online", exact: true })).toBeEnabled();
   expect(mock.posts).toEqual([]);
 });
@@ -209,22 +211,22 @@ test("late recovery library response cannot restore another guild or logged-out 
   await page.getByLabel("Server keanggotaan kamu").selectOption(guildB);
   await expect(page.locator(".save-status")).toContainText("Memuat library");
   await finishA();
-  await expect(page.getByAltText("Perkiraan background pribadi: Background pribadi 1")).toHaveCount(0);
+  await expect(page.locator(".draft-summary")).not.toContainText("Background pribadi 1");
   await expect(page.getByRole("button", { name: "Simpan online", exact: true })).toBeDisabled();
   await expect.poll(() => finish !== finishA).toBe(true);
   const finishB = finish!;
   await page.getByRole("button", { name: "Logout Discord" }).click();
   await finishB();
   await expect(page.getByRole("heading", { name: "Library pribadi" })).toHaveCount(0);
-  await expect(page.getByAltText("Perkiraan background pribadi: Background pribadi 1")).toHaveCount(0);
+  await expect(page.locator(".draft-summary")).not.toContainText("Background pribadi 1");
 });
 
-test("media failure is honest and unknown preference never claims saved", async ({ page }) => {
+test("preview failure is honest and unknown preference never claims saved", async ({ page }) => {
   await setup(page, { occupied: true, preference: id });
-  await page.route("**/api/backgrounds/*/media?*", (route) => route.fulfill({ status: 403, json: { error: "slot_locked" } }));
-  await page.reload();
-  await page.getByLabel("Server keanggotaan kamu").selectOption(guildA);
-  await expect(page.locator(".media-fallback")).toContainText("bukan gambar tersimpan");
+  await page.route("**/api/profile-preview", route => route.fulfill({ status: 403, json: { error: "slot_locked" } }));
+  await page.getByRole("button", { name: "Perbarui preview", exact: true }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Akses server atau slot berubah" })).toBeVisible();
+  await expect(page.getByRole("img", { name: "Hasil renderer bot untuk akun dan server terpilih" })).toHaveCount(0);
   await page.getByLabel("Server keanggotaan kamu").selectOption(guildB);
   await expect(page.locator(".save-status")).toContainText("tidak dikenal atau tidak valid");
   await expect(page.getByRole("button", { name: "Simpan online", exact: true })).toBeDisabled();
