@@ -12,7 +12,7 @@ export async function handleProfileBio(request: Request, dependencies: Options =
     const config = authConfig(env);
     if (!config) throw new ApiError(503, "setup_required");
     if (request.method !== "GET" && (request.headers.get("origin") !== config.origin || request.headers.get("sec-fetch-site") === "cross-site")) throw new ApiError(403, "csrf");
-    const { user } = await authenticatedMember(request, config, dependencies);
+    const { user } = await authenticatedMember(request, config, { ...dependencies, freshDiscord: request.method !== "GET" });
     if (!await (dependencies.limit ? dependencies.limit(user.id) : enforceRateLimit(`profile-bio:${user.id}`, 60, env))) throw new ApiError(429, "rate_limited");
     if (new URL(request.url).searchParams.size) throw new ApiError(400, "invalid_input");
     const store = dependencies.store ?? bioStore(env, dependencies.fetch);

@@ -52,7 +52,7 @@ export async function handleModeration(request: Request, id?: string, dependenci
     const config = authConfig(env);
     if (!config) throw new ApiError(503, "setup_required");
     if (mutation && (request.headers.get("origin") !== config.origin || request.headers.get("sec-fetch-site") === "cross-site")) throw new ApiError(403, "csrf");
-    const { user, guilds } = await authenticatedMember(request, config, dependencies);
+    const { user, guilds } = await authenticatedMember(request, config, { ...dependencies, freshDiscord: mutation });
     if (!await (dependencies.limit ? dependencies.limit(user.id) : enforceRateLimit(`background-moderation:${user.id}`, 30, env))) throw new ApiError(429, "rate_limited");
     const params = new URL(request.url).searchParams;
     const guildId = params.get("guildId");

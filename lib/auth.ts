@@ -8,12 +8,14 @@ type Flow = { state: string; verifier: string; expiresAt: number };
 type Session = { accessToken: string; expiresAt: number };
 export type Identity = { id: string; username: string; name: string };
 export type Guild = { id: string; name: string; canModerate?: boolean };
-export type Dependencies = { env?: Record<string, string | undefined>; fetch?: typeof fetch; now?: () => number; limit?: (key: string) => Promise<boolean> | boolean; discordScope?: object };
+export type Dependencies = { env?: Record<string, string | undefined>; fetch?: typeof fetch; now?: () => number; limit?: (key: string) => Promise<boolean> | boolean; discordScope?: object; freshDiscord?: boolean };
 export const sessionName = "profile_session";
 const flowName = "profile_oauth";
 const discordTimeoutMs = 8000;
 type DiscordWork<T> = { promise: Promise<T>; waiters: number; settled: boolean; cancel: (reason: unknown) => void };
-type DiscordState = { pending: Map<string, DiscordWork<unknown>>; contexts: Map<string, DiscordWork<{ user: Identity; guilds: Guild[] }>>; lanes: Map<string, number>; aliases: Map<string, string>; cooldowns: Map<string, number> };
+type MemberContext = { user: Identity; guilds: Guild[] };
+type CachedContext = { expiresAt: number; value: MemberContext };
+type DiscordState = { pending: Map<string, DiscordWork<unknown>>; contexts: Map<string, DiscordWork<MemberContext>>; contextCache: Map<string, CachedContext>; lanes: Map<string, number>; aliases: Map<string, string>; cooldowns: Map<string, number> };
 const discordStateKey = Symbol.for("profile-dashboard.discord-auth.v3");
 const shared = globalThis as typeof globalThis & { [discordStateKey]?: WeakMap<object, DiscordState> };
 const discordStates = shared[discordStateKey] ??= new WeakMap<object, DiscordState>();
@@ -26,7 +28,7 @@ function discordState(config: AuthConfig, token: string, dependencies: Dependenc
   const scope = dependencies.discordScope ?? globalThis;
   let state = discordStates.get(scope);
   if (!state) {
-    state = { pending: new Map(), contexts: new Map(), lanes: new Map(), aliases: new Map(), cooldowns: new Map() };
+    state = { pending: new Map(), contexts: new Map(), contextCache: new Map(), lanes: new Map(), aliases: new Map(), cooldowns: new Map() };
     discordStates.set(scope, state);
   }
   const configKey = createHash("sha256").update(JSON.stringify([config.clientId, config.clientSecret, config.origin, config.password])).digest("hex");
@@ -219,19 +221,29 @@ export function parseGuilds(value: unknown): Guild[] {
   });
 }
 
-async function discordContext(token: string, config: AuthConfig, dependencies: Dependencies, signal: AbortSignal) {
+async function discordContext(token: string, config: AuthConfig, dependencies: Dependencies, signal: AbortSignal): Promise<MemberContext> {
   const { state, tokenKey } = discordState(config, token, dependencies);
   if (signal.aborted) throw discordFailure("aborted");
   if (discordWaiters >= 512) throw discordFailure("capacity");
+  const now = dependencies.now ?? Date.now;
+  const cached = state.contextCache.get(tokenKey);
+  if (!dependencies.freshDiscord && cached && cached.expiresAt > now()) return cached.value;
+  if (cached && (dependencies.freshDiscord || cached.expiresAt <= now())) state.contextCache.delete(tokenKey);
   let pending = state.contexts.get(tokenKey);
   if (!pending) {
     if (state.contexts.size >= 256) throw discordFailure("capacity");
-    const started = Date.now();
+    const started = now();
     const controller = new AbortController();
-    const work: DiscordWork<{ user: Identity; guilds: Guild[] }> = { promise: Promise.resolve().then(async () => {
+    const work: DiscordWork<MemberContext> = { promise: Promise.resolve().then(async () => {
       const user = await discordRead("users/@me", token, config, dependencies, controller.signal, parseIdentity);
-      const guilds = await discordRead("users/@me/guilds?limit=200", token, config, dependencies, controller.signal, parseGuilds, discordTimeoutMs - (Date.now() - started));
-      return { user, guilds };
+      const guilds = await discordRead("users/@me/guilds?limit=200", token, config, dependencies, controller.signal, parseGuilds, discordTimeoutMs - (now() - started));
+      const value = { user, guilds };
+      if (state.contextCache.size >= 256) {
+        const oldest = state.contextCache.keys().next().value;
+        if (oldest !== undefined) state.contextCache.delete(oldest);
+      }
+      state.contextCache.set(tokenKey, { value, expiresAt: now() + 30000 });
+      return value;
     }).finally(() => {
       work.settled = true;
       if (state.contexts.get(tokenKey) === work) state.contexts.delete(tokenKey);

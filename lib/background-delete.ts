@@ -40,7 +40,7 @@ export async function handleBackgroundDelete(request: Request, slotPath: string,
     const config = authConfig(env);
     if (!config) throw new ApiError(503, "setup_required");
     if (request.headers.get("origin") !== config.origin || request.headers.get("sec-fetch-site") === "cross-site") throw new ApiError(403, "csrf");
-    const { user, guilds } = await authenticatedMember(request, config, dependencies);
+    const { user, guilds } = await authenticatedMember(request, config, { ...dependencies, freshDiscord: true });
     if (!await (dependencies.limit ? dependencies.limit(user.id) : enforceRateLimit(`background-delete:${user.id}`, 6, env))) throw new ApiError(429, "rate_limited");
     if (!/^[123]$/.test(slotPath)) throw new ApiError(400, "invalid_slot");
     const slot = Number(slotPath);

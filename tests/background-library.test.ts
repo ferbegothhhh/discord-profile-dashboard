@@ -52,7 +52,7 @@ test("auth, registry, membership, rate limits and exact query deny before level 
   await check(await handleBackgroundLibrary(await browser(), { ...options, env: { ...env, SESSION_PASSWORD: "" } }), 503);
   await check(await handleBackgroundLibrary(await browser(), { ...options, env: { ...env, PROFILE_BOT_GUILD_IDS: other } }), 403);
   await check(await handleBackgroundLibrary(await browser(), { ...options, env: { ...env, PROFILE_BOT_GUILD_IDS: "" } }), 503);
-  await check(await handleBackgroundLibrary(await browser(), { ...options, fetch: (async (url) => Response.json(String(url).includes("guilds") ? [] : { id: user, username: "tester" })) as typeof fetch }), 403);
+  await check(await handleBackgroundLibrary(await browser(), { ...options, discordScope: {}, fetch: (async (url) => Response.json(String(url).includes("guilds") ? [] : { id: user, username: "tester" })) as typeof fetch }), 403);
   await check(await handleBackgroundLibrary(await browser(), { ...options, limit: () => false }), 429);
   for (const query of ["", "guildId=invalid", `guildId=${guild}&guildId=${guild}`, `guildId=${guild}&userId=${other}`, `guildId=${guild}&extra=1`]) await check(await handleBackgroundLibrary(await browser(query), options), 400);
   for (const method of ["POST", "PUT", "DELETE", "PATCH"]) await check(await handleBackgroundLibrary(new Request(await browser(), { method }), options), 405);

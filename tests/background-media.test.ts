@@ -57,7 +57,7 @@ test("session, method, registry, membership and limiter gate all data access", a
   await failure(await handleBackgroundMedia(new Request(await browser(), { headers: {} }), id, f.dependencies), 401);
   await failure(await handleBackgroundMedia(new Request(await browser(), { method: "POST" }), id, f.dependencies), 405);
   await failure(await handleBackgroundMedia(await browser(), id, { ...f.dependencies, env: { ...env, PROFILE_BOT_GUILD_IDS: other } }), 403);
-  await failure(await handleBackgroundMedia(await browser(), id, { ...f.dependencies, fetch: (async (url) => Response.json(String(url).includes("guilds") ? [] : { id: user, username: "tester" })) as typeof fetch }), 403);
+  await failure(await handleBackgroundMedia(await browser(), id, { ...f.dependencies, discordScope: {}, fetch: (async (url) => Response.json(String(url).includes("guilds") ? [] : { id: user, username: "tester" })) as typeof fetch }), 403);
   await failure(await handleBackgroundMedia(await browser(), id, { ...f.dependencies, limit: () => false }), 429);
   assert.deepEqual(f.events, []);
 });

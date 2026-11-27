@@ -28,7 +28,7 @@ export async function handlePreferences(request: Request, dependencies: Options 
     const config = authConfig(env);
     if (!config) throw new ApiError(503, "setup_required");
     if (request.method === "POST" && (request.headers.get("origin") !== config.origin || request.headers.get("sec-fetch-site") === "cross-site")) throw new ApiError(403, "csrf");
-    const { user, guilds } = await authenticatedMember(request, config, dependencies);
+    const { user, guilds } = await authenticatedMember(request, config, { ...dependencies, freshDiscord: request.method === "POST" });
     if (!await (dependencies.limit ? dependencies.limit(user.id) : enforceRateLimit(`preferences:${user.id}`, 60, env))) throw new ApiError(429, "rate_limited");
     let guildId: unknown;
     let backgroundId: unknown;

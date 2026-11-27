@@ -44,7 +44,7 @@ test("browser identity cannot be supplied; saves and resets stay isolated by gui
 
 test("membership and operator registry independently deny guild access", async () => {
   await check(await handlePreferences(await browser(), { ...deps, env: { ...env, PROFILE_BOT_GUILD_IDS: other } }), 403);
-  await check(await handlePreferences(await browser(), { ...deps, fetch: (async (url) => Response.json(String(url).includes("guilds") ? [] : { id: user, username: "tester" })) as typeof fetch }), 403);
+  await check(await handlePreferences(await browser(), { ...deps, discordScope: {}, fetch: (async (url) => Response.json(String(url).includes("guilds") ? [] : { id: user, username: "tester" })) as typeof fetch }), 403);
   await check(await handlePreferences(await browser(), { ...deps, env: { ...env, PROFILE_BOT_GUILD_IDS: "" } }), 503);
 });
 

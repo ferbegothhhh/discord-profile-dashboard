@@ -226,7 +226,7 @@ test("member authorization allows sequential Discord latency above the old two-s
   assert.equal(signals[0].aborted, false);
 });
 
-test("simultaneous member reads stay token-isolated and later operations validate again", async () => {
+test("simultaneous member reads stay token-isolated and successful context is briefly reused", async () => {
   const other = "223456789012345678";
   let calls = 0;
   const requests = await Promise.all(["first-token", "second-token"].map(async (accessToken) => req("session", { headers: { cookie: `profile_session=${await sealData({ accessToken, expiresAt: now + 600000 }, { password: env.SESSION_PASSWORD, ttl: 28800 })}` } })));
@@ -240,7 +240,7 @@ test("simultaneous member reads stay token-isolated and later operations validat
   assert.deepEqual(results.map((result) => [result.user.id, result.guilds[0].id, result.guilds[0].canModerate]), [[id, id, true], [other, other, undefined]]);
   assert.equal(calls, 4);
   await authenticatedMember(requests[0], authConfig(env)!, { ...deps, fetch });
-  assert.equal(calls, 6);
+  assert.equal(calls, 4);
 });
 
 test("Discord 429 with Retry-After and invalid JSON fail closed without retry or stale authorization", async () => {
@@ -264,7 +264,7 @@ test("Discord 429 with Retry-After and invalid JSON fail closed without retry or
   }
 });
 
-test("session and concurrent authorization share only pending reads and revalidate revoked permissions", async () => {
+test("session and concurrent authorization share reads and refresh permissions after the cache window", async () => {
   const request = req("session", { headers: { cookie: await sessionCookie() } });
   let calls = 0;
   let permissions = "8";
@@ -283,8 +283,8 @@ test("session and concurrent authorization share only pending reads and revalida
   assert.equal((results[0] as Response).status, 200);
   assert.equal((results[1] as Awaited<ReturnType<typeof authenticatedMember>>).guilds[0].canModerate, true);
   permissions = "0";
-  assert.equal((await authenticatedMember(request, authConfig(env)!, dependencies)).guilds[0].canModerate, undefined);
-  assert.equal(calls, 4);
+  assert.equal((await authenticatedMember(request, authConfig(env)!, dependencies)).guilds[0].canModerate, true);
+  assert.equal(calls, 2);
 });
 
 test("pending reads share equivalent environments and fetch wrappers", async () => {
@@ -335,6 +335,7 @@ test("coalesced failures settle, bound Retry-After, preserve sessions and never 
   await authenticatedMember(refreshed, authConfig(env)!, dependencies);
   assert.equal(calls, 3);
   status = 401;
+  time += 30000;
   const revoked = await handleAuth(refreshed, "session", dependencies);
   assert.equal(revoked.status, 401);
   assert.match(revoked.headers.get("set-cookie")!, /Max-Age=0/);
@@ -453,7 +454,27 @@ test("Discord cooldown shares token endpoints, isolates tokens and expires witho
   const refreshed = req("session", { headers: { cookie: await sessionCookie(time + 600000) } });
   await authenticatedMember(refreshed, authConfig(env)!, dependencies);
   await authenticatedMember(refreshed, authConfig(env)!, dependencies);
-  assert.equal(calls, 8);
+  assert.equal(calls, 6);
+});
+
+test("successful Discord context is cached per session for thirty seconds and refreshes after expiry", async () => {
+  let time = now;
+  let calls = 0;
+  let permissions = "8";
+  const cookie = await sessionCookie();
+  const fetch = mockFetch(url => {
+    calls++;
+    return Response.json(url.includes("guilds?") ? [{ id, name: "Guild", permissions }] : { id, username: "tester" });
+  });
+  const dependencies = { ...deps, now: () => time, fetch };
+  const request = () => req("session", { headers: { cookie } });
+  assert.equal((await authenticatedMember(request(), authConfig(env)!, dependencies)).guilds[0].canModerate, true);
+  permissions = "0";
+  assert.equal((await authenticatedMember(request(), authConfig(env)!, dependencies)).guilds[0].canModerate, true);
+  assert.equal(calls, 2);
+  time += 30000;
+  assert.equal((await authenticatedMember(request(), authConfig(env)!, dependencies)).guilds[0].canModerate, undefined);
+  assert.equal(calls, 4);
 });
 
 test("explicit Discord global cooldown shares wrappers and environments but isolates config and explicit scope", async () => {
@@ -497,6 +518,7 @@ test("invalid Discord hints use conservative fallback and bounded bodies never l
 test("non-429 failures clean shared work without starting cooldown", async () => {
   const request = req("session", { headers: { cookie: await sessionCookie() } });
   for (const status of [500, 503]) {
+    deps.discordScope = {};
     let calls = 0;
     let failed = true;
     const fetch = mockFetch(async (url) => {
@@ -559,7 +581,7 @@ test("late overlapping caller shares the whole pending context after identity co
   assert.equal(calls, 2);
 });
 
-test("successful exhausted headers proactively pace fresh reads and excessive waits fail closed", async () => {
+test("successful exhausted headers are respected when a cached context expires", async () => {
   const request = req("session", { headers: { cookie: await sessionCookie() } });
   const guildTimes: number[] = [];
   let reset = "0.25";
@@ -569,17 +591,20 @@ test("successful exhausted headers proactively pace fresh reads and excessive wa
     guildTimes.push(performance.now());
     return Response.json([{ id, name: "Guild", permissions }], { headers: { "X-RateLimit-Bucket": "mock-guild-bucket", "X-RateLimit-Remaining": "0", "X-RateLimit-Reset-After": reset } });
   });
-  const dependencies = { ...deps, now: Date.now, fetch };
-  const cookie = `profile_session=${await sealData({ accessToken: "paced-token", expiresAt: Date.now() + 600000 }, { password: env.SESSION_PASSWORD, ttl: 28800 })}`;
+  let time = Date.now();
+  const dependencies = { ...deps, now: () => time, fetch };
+  const cookie = `profile_session=${await sealData({ accessToken: "paced-token", expiresAt: time + 600000 }, { password: env.SESSION_PASSWORD, ttl: 28800 })}`;
   const fresh = new Request(request, { headers: { cookie } });
   await authenticatedMember(fresh, authConfig(env)!, dependencies);
   permissions = "0";
   reset = "20";
+  assert.equal((await authenticatedMember(fresh, authConfig(env)!, dependencies)).guilds[0].canModerate, true);
+  assert.equal(guildTimes.length, 1);
+  time += 30000;
   assert.equal((await authenticatedMember(fresh, authConfig(env)!, dependencies)).guilds[0].canModerate, undefined);
-  assert.ok(guildTimes[1] - guildTimes[0] >= 340);
-  const started = performance.now();
-  await assert.rejects(authenticatedMember(fresh, authConfig(env)!, dependencies), (error: unknown) => error instanceof ApiError && error.reason === "rate_limited" && error.retryAfter! >= 19);
-  assert.ok(performance.now() - started < 1000);
+  assert.equal(guildTimes.length, 2);
+  const cached = await authenticatedMember(fresh, authConfig(env)!, dependencies);
+  assert.equal(cached.guilds[0].canModerate, undefined);
   assert.equal(guildTimes.length, 2);
 });
 
